@@ -1,3 +1,4 @@
 .DS_Store
 __pycache__/
 *.pyc
+scripts/shortcut_run_shell_script.sh

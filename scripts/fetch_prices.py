@@ -144,6 +144,22 @@ def archive_day(day_data: dict):
         f.write(json.dumps(day_data) + "\n")
 
 
+SLOTS = ("morning", "afternoon", "evening")
+
+
+def dubai_slot(now) -> str:
+    """Classify a run into one of the 3 daily fetch windows by hour,
+    tolerant of the run firing a few minutes late (GitHub Actions cron
+    isn't exact). 10am/2pm/6pm Dubai -> morning/afternoon/evening."""
+    h = now.hour
+    if h < 12:
+        return "morning"
+    elif h < 16:
+        return "afternoon"
+    else:
+        return "evening"
+
+
 def blank_day(today_str: str) -> dict:
     return {
         "date": today_str,
@@ -157,6 +173,14 @@ def blank_day(today_str: str) -> dict:
             "kheeljtimes_kg": {"high": None, "last_seen": None},
             "kitco_kg": {"high": None, "last_seen": None},
         },
+        # Additive alongside the "high" tracking above -- this is the
+        # only place each of the 3 daily fetches survives as its own
+        # correctly-timestamped reading (the "high" fields above only
+        # ever show the day's running maximum, whose last_seen time can
+        # drift away from the value it's attached to once a later,
+        # lower reading comes in). Needed for the Numbers
+        # Morning/Afternoon/Evening columns and daily Kitco open/close.
+        "readings": {slot: None for slot in SLOTS},
     }
 
 
@@ -165,6 +189,26 @@ def update_high(day_data: dict, section: str, key: str, new_value: float, ts: st
     if entry["high"] is None or new_value > entry["high"]:
         entry["high"] = new_value
     entry["last_seen"] = ts
+
+
+def record_reading(day_data: dict, slot: str, ts: str, kt_gold, kt_silver,
+                    kitco_gold_oz, kitco_gold_gms, kitco_silver_kg):
+    """Overwrites (not accumulates) this slot's reading -- if the same
+    window's run fires twice (e.g. a manual re-run), the slot just
+    reflects the latest one, same as the "high" fields behave."""
+    day_data.setdefault("readings", {slot: None for slot in SLOTS})
+    day_data["readings"][slot] = {
+        "time": ts,
+        "gold": {
+            "kheeljtimes_gms_24k": kt_gold,
+            "kitco_oz": kitco_gold_oz,
+            "kitco_gms_24k": kitco_gold_gms,
+        },
+        "silver": {
+            "kheeljtimes_kg": kt_silver,
+            "kitco_kg": kitco_silver_kg,
+        },
+    }
 
 
 def main():
@@ -183,6 +227,7 @@ def main():
 
     errors = []
 
+    kt_gold = kt_silver = None
     try:
         kt_gold, kt_silver = fetch_kt()
         update_high(day_data, "gold", "kheeljtimes_gms_24k", kt_gold, ts)
@@ -190,6 +235,7 @@ def main():
     except Exception as e:
         errors.append(f"KT fetch failed: {e}")
 
+    kitco_gold_oz_aed = kitco_gold_gms = kitco_silver_kg = None
     try:
         kitco_gold_oz_aed, kitco_silver_oz_aed = fetch_kitco()
         kitco_gold_gms = kitco_gold_oz_aed / OZ_TO_GRAMS
@@ -199,6 +245,14 @@ def main():
         update_high(day_data, "silver", "kitco_kg", kitco_silver_kg, ts)
     except Exception as e:
         errors.append(f"Kitco fetch failed: {e}")
+
+    # Record this run as its own timestamped slot regardless of which
+    # source(s) succeeded -- partial data (e.g. KT only) still gets a
+    # slot entry, just with the failed source's fields left None.
+    record_reading(
+        day_data, dubai_slot(now), ts,
+        kt_gold, kt_silver, kitco_gold_oz_aed, kitco_gold_gms, kitco_silver_kg,
+    )
 
     day_data["last_updated"] = ts
 
