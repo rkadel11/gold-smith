@@ -211,6 +211,34 @@ def record_reading(day_data: dict, slot: str, ts: str, kt_gold, kt_silver,
     }
 
 
+def update_kitco_open_close(day_data: dict):
+    """Daily Kitco gold open/close, derived fresh from "readings" each
+    run: opening = the day's earliest available slot (normally morning,
+    but falls back to whichever ran first if an earlier slot was
+    missed); closing = the most recent available slot -- so this keeps
+    advancing through the day until evening's run makes it final."""
+    readings = day_data.get("readings", {})
+    available = [(s, readings[s]) for s in SLOTS if readings.get(s)]
+    if not available:
+        day_data["kitco_open_close"] = {"opening": None, "closing": None}
+        return
+
+    def _pick(slot, reading):
+        return {
+            "slot": slot,
+            "time": reading["time"],
+            "kitco_oz": reading["gold"]["kitco_oz"],
+            "kitco_gms_24k": reading["gold"]["kitco_gms_24k"],
+        }
+
+    opening_slot, opening_reading = available[0]
+    closing_slot, closing_reading = available[-1]
+    day_data["kitco_open_close"] = {
+        "opening": _pick(opening_slot, opening_reading),
+        "closing": _pick(closing_slot, closing_reading),
+    }
+
+
 def main():
     now = datetime.now(DUBAI_TZ)
     today_str = now.strftime("%Y-%m-%d")
@@ -253,6 +281,7 @@ def main():
         day_data, dubai_slot(now), ts,
         kt_gold, kt_silver, kitco_gold_oz_aed, kitco_gold_gms, kitco_silver_kg,
     )
+    update_kitco_open_close(day_data)
 
     day_data["last_updated"] = ts
 
