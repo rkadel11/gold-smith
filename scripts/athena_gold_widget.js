@@ -1,0 +1,384 @@
+// Athena Gold Widget — Scriptable iOS
+// Canvas: 360×169pt (Medium widget)
+// Tap to refresh · Auto-updates every 30 min
+//
+// v2 — reads metal-price-log's own current.json instead of scraping
+// KT/GN/Kitco/DC HTML directly. One reliable JSON fetch, no fragile
+// regex parsing, no per-widget scraping duplication — the GitHub
+// Actions pipeline (fetch_prices.py) already does that 3x/day and
+// commits the result publicly.
+//
+// v3 — the top "spot" line is now live USD (fetched directly from
+// gold-api.com, the same source fetch_prices.py uses), not the
+// AED-converted value from the 3x/day GitHub snapshot. This refreshes
+// every time the widget itself refreshes rather than only 3x/day. The
+// KT-vs-Kitco AED comparison rows below still come from current.json,
+// since KT is inherently an AED retail price.
+//
+// v4 — spot source is now Kitco itself: their page embeds a Next.js
+// "__NEXT_DATA__" script tag with clean structured JSON (bid/ask/mid/
+// change/changePercentage), not just HTML to regex-scrape -- as
+// reliable as a real API, confirmed 2026-09-15. Falls back to
+// gold-api.com, then to the cached AED value, if Kitco's page ever
+// changes shape. % change now comes from Kitco's own official
+// changePercentage (vs. the previous close) rather than a comparison
+// against this widget's own last refresh.
+
+const GOLD       = new Color("#f9c416")
+const GOLD_DIM   = new Color("#f9c416", 0.45)
+const PURPLE     = new Color("#c4b5fd")
+const PURPLE_DIM = new Color("#c4b5fd", 0.40)
+const BG_DEEP    = new Color("#0d0014")
+const BG_CARD    = new Color("#160025")
+const RED        = new Color("#ef4444")
+const GREEN      = new Color("#22c55e")
+
+const DATA_URL = "https://raw.githubusercontent.com/rkadel11/metal-price-log/main/data/current.json"
+const KITCO_URL = "https://www.kitco.com/price/precious-metals"
+const GOLD_API_XAU_URL = "https://api.gold-api.com/price/XAU"
+const OZ_TO_GRAMS = 31.1034768
+const AED_PER_USD = 3.6725
+
+// ── Fetch ──────────────────────────────────────────────
+async function fetchCurrent() {
+  const req = new Request(DATA_URL)
+  req.timeoutInterval = 15
+  return await req.loadJSON()
+}
+
+// Live USD spot straight from Kitco's own page -- their Next.js
+// frontend embeds the full server-rendered price state as JSON in a
+// "__NEXT_DATA__" script tag, so this is a structured JSON parse, not
+// scraping visible HTML for numbers. Includes Kitco's own official
+// change/changePercentage (vs. the previous close), which is more
+// meaningful than comparing against this widget's own last refresh.
+async function fetchKitcoLive() {
+  const req = new Request(KITCO_URL)
+  req.headers = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+  }
+  req.timeoutInterval = 12
+  const html = await req.loadString()
+  const m = html.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s)
+  if (!m) throw new Error("Kitco page structure changed (no __NEXT_DATA__)")
+  const data = JSON.parse(m[1])
+  const queries = data?.props?.pageProps?.dehydratedState?.queries || []
+  const goldQuery = queries.find(q => q?.state?.data?.gold)
+  const gold = goldQuery?.state?.data?.gold?.results?.[0]
+  if (!gold || !(gold.mid > 0)) throw new Error("Kitco gold data missing/invalid")
+  return {
+    usdOz: gold.mid,
+    usdGm: gold.mid / OZ_TO_GRAMS,
+    changePercentage: gold.changePercentage,
+  }
+}
+
+// Fallback if Kitco's page structure ever changes underneath us.
+// Fetched fresh on every widget refresh -- not cached in
+// current.json, which only updates 3x/day.
+async function fetchLiveUsdGold() {
+  const req = new Request(GOLD_API_XAU_URL)
+  req.timeoutInterval = 10
+  const json = await req.loadJSON()
+  const usdOz = parseFloat(json.price)
+  if (!(usdOz > 0)) throw new Error("bad price from gold-api.com")
+  return { usdOz, usdGm: usdOz / OZ_TO_GRAMS, changePercentage: null }
+}
+
+// Fallback only -- used when Kitco's own changePercentage isn't
+// available (gold-api.com/cached paths). Compares the live oz price
+// against the last one THIS WIDGET saw (persisted in the Keychain,
+// since a widget's JS context doesn't survive between refreshes), so
+// it's "change since last refresh", not "change since previous
+// close" like Kitco's own figure. -> {direction, pct} or null.
+//
+// Read and write are kept separate (rather than one combined
+// compare-and-store call) so the Keychain gets updated on EVERY
+// successful fetch regardless of which source served it -- otherwise,
+// if Kitco succeeds for a while and then fails once, the fallback
+// comparison would be against a stale value from whenever Kitco last
+// failed instead of the actual last-known price.
+const LAST_OZ_KEY = "athenaGoldWidget.lastSpotOz"
+function readLastOz() {
+  if (!Keychain.contains(LAST_OZ_KEY)) return null
+  const prev = parseFloat(Keychain.get(LAST_OZ_KEY))
+  return isNaN(prev) ? null : prev
+}
+function writeLastOz(currentOz) {
+  if (currentOz != null) Keychain.set(LAST_OZ_KEY, String(currentOz))
+}
+function fallbackDirection(currentOz) {
+  const prev = readLastOz()
+  if (currentOz == null || prev == null || prev <= 0) return null
+  const pct = ((currentOz - prev) / prev) * 100
+  const direction = currentOz > prev ? "up" : currentOz < prev ? "down" : "same"
+  return { direction, pct }
+}
+
+// Pick whichever of morning/afternoon/evening is chronologically the
+// most recent -- gives one consistent "latest" snapshot instead of
+// mixing metrics that were last true at different times of day.
+function latestReading(data) {
+  const slots = ["morning", "afternoon", "evening"]
+  let latest = null
+  for (const s of slots) {
+    const r = data.readings && data.readings[s]
+    if (r && (!latest || new Date(r.time) > new Date(latest.time))) {
+      latest = r
+    }
+  }
+  return latest
+}
+
+// Falls back to the day's "high" fields if readings aren't present at
+// all yet (e.g. very first run of a new day, or an older data file).
+function extractPrices(data) {
+  const latest = latestReading(data)
+  if (latest) {
+    return {
+      time: latest.time,
+      ktGoldGm: latest.gold.kheeljtimes_gms_24k,
+      kitcoGoldOz: latest.gold.kitco_oz,
+      kitcoGoldGm: latest.gold.kitco_gms_24k,
+      ktSilverKg: latest.silver.kheeljtimes_kg,
+      kitcoSilverKg: latest.silver.kitco_kg,
+      isLive: true,
+    }
+  }
+  return {
+    time: data.last_updated,
+    ktGoldGm: data.gold?.kheeljtimes_gms_24k?.high ?? null,
+    kitcoGoldOz: data.gold?.kitco_oz?.high ?? null,
+    kitcoGoldGm: data.gold?.kitco_gms_24k?.high ?? null,
+    ktSilverKg: data.silver?.kheeljtimes_kg?.high ?? null,
+    kitcoSilverKg: data.silver?.kitco_kg?.high ?? null,
+    isLive: false,
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────
+const f = v => v == null ? "—" : v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+const fmtTime = iso => {
+  if (!iso) return "—"
+  return new Date(iso).toLocaleTimeString("en-AE", { hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
+function goldDivider(w) {
+  const d = w.addStack()
+  d.size = new Size(0, 1)
+  d.backgroundColor = GOLD_DIM
+  d.cornerRadius = 1
+}
+
+// ── Build — tuned for 360×169pt ───────────────────────
+async function buildWidget(p) {
+  const w = new ListWidget()
+  w.backgroundColor = BG_DEEP
+  w.setPadding(8, 16, 8, 16)
+  w.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000)
+  w.url = "scriptable:///run/AthenaGold"
+
+  // ── HEADER ────────────────────────────────────────────
+  const hdr = w.addStack()
+  hdr.layoutHorizontally()
+  hdr.centerAlignContent()
+
+  hdr.addSpacer()
+  const ttl = hdr.addText("⬡  GOLD RATES  ⬡")
+  ttl.textColor = GOLD
+  ttl.font = Font.boldSystemFont(13)
+  hdr.addSpacer()
+
+  const tm = hdr.addText(fmtTime(p.time))
+  tm.textColor = p.isLive ? PURPLE : new Color("#a78bfa", 0.6)
+  tm.font = Font.systemFont(10)
+  hdr.addSpacer(4)
+  const ref = hdr.addText("↻")
+  ref.textColor = GOLD
+  ref.font = Font.boldSystemFont(13)
+
+  w.addSpacer(4)
+  goldDivider(w)
+  w.addSpacer(4)
+
+  // ── SPOT (live USD, fetched fresh this refresh) ────────
+  const spot = w.addStack()
+  spot.layoutHorizontally()
+
+  const ozB = spot.addStack()
+  ozB.layoutVertically()
+  const ozL = ozB.addText(p.liveSpot ? "Spot /oz" : "Spot /oz (cached)")
+  ozL.textColor = PURPLE_DIM
+  ozL.font = Font.systemFont(8)
+  ozB.addSpacer(2)
+  const ozRow = ozB.addStack()
+  ozRow.layoutHorizontally()
+  ozRow.centerAlignContent()
+  const ozU = ozRow.addText("$ " + f(p.usdOz))
+  ozU.textColor = GOLD
+  ozU.font = Font.boldSystemFont(13)
+  if (p.direction === "up" || p.direction === "down") {
+    ozRow.addSpacer(4)
+    const changeColor = p.direction === "up" ? GREEN : RED
+    const arrowChar = p.direction === "up" ? "▲" : "▼"
+    const label = p.pct != null ? `${arrowChar} ${Math.abs(p.pct).toFixed(2)}%` : arrowChar
+    const arrow = ozRow.addText(label)
+    arrow.textColor = changeColor
+    arrow.font = Font.boldSystemFont(10)
+  }
+
+  spot.addSpacer()
+
+  const gmB = spot.addStack()
+  gmB.layoutVertically()
+  const gmL = gmB.addText(p.liveSpot ? "Spot /gm" : "Spot /gm (cached)")
+  gmL.textColor = PURPLE_DIM
+  gmL.font = Font.systemFont(8)
+  gmL.rightAlignText()
+  gmB.addSpacer(2)
+  const gmU = gmB.addText("$ " + f(p.usdGm))
+  gmU.textColor = GOLD
+  gmU.font = Font.boldSystemFont(13)
+  gmU.rightAlignText()
+
+  w.addSpacer(4)
+  goldDivider(w)
+  w.addSpacer(3)
+
+  // ── COLUMN HEADERS ─────────────────────────────────────
+  const ch = w.addStack()
+  ch.layoutHorizontally()
+  const sp = ch.addText("        ")
+  sp.font = Font.systemFont(8)
+  ch.addSpacer()
+  for (const lbl of ["KT", "Kitco"]) {
+    const t = ch.addText(lbl)
+    t.textColor = PURPLE_DIM
+    t.font = Font.boldSystemFont(8)
+    ch.addSpacer()
+  }
+
+  w.addSpacer(3)
+
+  // ── GOLD ROW (AED/gm) ──────────────────────────────────
+  const rGold = w.addStack()
+  rGold.layoutHorizontally()
+  rGold.backgroundColor = BG_CARD
+  rGold.cornerRadius = 7
+  rGold.setPadding(4, 12, 4, 12)
+  const lGold = rGold.addText("Gold/gm")
+  lGold.textColor = GOLD
+  lGold.font = Font.boldSystemFont(12)
+  rGold.addSpacer()
+  for (const val of [p.ktGoldGm, p.kitcoGoldGm]) {
+    const t = rGold.addText(f(val))
+    t.textColor = PURPLE
+    t.font = Font.boldSystemFont(12)
+    rGold.addSpacer()
+  }
+
+  w.addSpacer(3)
+
+  // ── SILVER ROW (AED/kg) ────────────────────────────────
+  const rSilver = w.addStack()
+  rSilver.layoutHorizontally()
+  rSilver.backgroundColor = BG_CARD
+  rSilver.cornerRadius = 7
+  rSilver.setPadding(4, 12, 4, 12)
+  const lSilver = rSilver.addText("Silver/kg")
+  lSilver.textColor = GOLD
+  lSilver.font = Font.boldSystemFont(12)
+  rSilver.addSpacer()
+  for (const val of [p.ktSilverKg, p.kitcoSilverKg]) {
+    const t = rSilver.addText(f(val))
+    t.textColor = PURPLE
+    t.font = Font.boldSystemFont(12)
+    rSilver.addSpacer()
+  }
+
+  // ── FOOTER ──────────────────────────────────────────────
+  w.addSpacer(4)
+  const footerText = p.isLive
+    ? "metal-price-log · tap to refresh"
+    : "showing today's high (no live reading yet)"
+  const ftr = w.addText(footerText)
+  ftr.textColor = PURPLE_DIM
+  ftr.font = Font.systemFont(8)
+  ftr.centerAlignText()
+
+  return w
+}
+
+// ── Error ──────────────────────────────────────────────
+function errorWidget(msg) {
+  const w = new ListWidget()
+  w.backgroundColor = BG_DEEP
+  w.setPadding(16, 16, 16, 16)
+  const t = w.addText("⬡  GOLD RATES  ⬡")
+  t.textColor = GOLD
+  t.font = Font.boldSystemFont(13)
+  w.addSpacer(8)
+  const e = w.addText(msg)
+  e.textColor = RED
+  e.font = Font.systemFont(10)
+  return w
+}
+
+// ── Main ───────────────────────────────────────────────
+let widget
+try {
+  const data = await fetchCurrent()
+  const prices = extractPrices(data)
+
+  let live = null
+  try {
+    live = await fetchKitcoLive()
+    prices.liveSpot = true
+  } catch (e1) {
+    try {
+      live = await fetchLiveUsdGold()
+      prices.liveSpot = true
+    } catch (e2) {
+      // Both live sources failed -- fall back to converting the
+      // cached AED value back to USD via the fixed peg, rather than
+      // showing nothing.
+      prices.liveSpot = false
+    }
+  }
+
+  if (live) {
+    prices.usdOz = live.usdOz
+    prices.usdGm = live.usdGm
+  } else {
+    prices.usdOz = prices.kitcoGoldOz != null ? prices.kitcoGoldOz / AED_PER_USD : null
+    prices.usdGm = prices.kitcoGoldGm != null ? prices.kitcoGoldGm / AED_PER_USD : null
+  }
+
+  if (live && live.changePercentage != null) {
+    // Kitco's own official change vs. the previous close.
+    const pct = live.changePercentage
+    prices.direction = pct > 0 ? "up" : pct < 0 ? "down" : "same"
+    prices.pct = pct
+  } else {
+    // No official change% available (gold-api/cached path) -- fall
+    // back to comparing against this widget's own last refresh.
+    // Read BEFORE writing, obviously.
+    const fb = fallbackDirection(prices.usdOz)
+    prices.direction = fb?.direction ?? null
+    prices.pct = fb?.pct ?? null
+  }
+  writeLastOz(prices.usdOz)
+
+  widget = (prices.ktGoldGm || prices.kitcoGoldGm)
+    ? await buildWidget(prices)
+    : errorWidget("No price data yet\nCheck metal-price-log repo")
+} catch (e) {
+  widget = errorWidget("Could not fetch prices\n" + e.message)
+}
+
+if (config.runsInWidget) {
+  Script.setWidget(widget)
+} else {
+  await widget.presentMedium()
+}
+Script.complete()
