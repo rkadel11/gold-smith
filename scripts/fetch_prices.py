@@ -33,9 +33,17 @@ OZ_TO_GRAMS = 31.1034768
 # No need to scrape an exchange rate for this.
 AED_PER_USD = 3.6725
 
-# Plain JSON, no auth, no browser. goldprice.org 403'd as bot traffic
-# and metals.live's endpoint is dead — gold-api.com confirmed live
-# 2026-09-08 (curl'd both endpoints, clean {"price": ...} response).
+# Primary: Kitco's own page. Their Next.js frontend embeds the full
+# server-rendered price state as JSON in a "__NEXT_DATA__" script tag
+# (gold.results[0] / silver.results[0], each with bid/ask/mid/change/
+# changePercentage) — a structured JSON parse, not scraping visible
+# HTML for numbers. Confirmed live 2026-09-15.
+KITCO_URL = "https://www.kitco.com/price/precious-metals"
+
+# Fallback if Kitco's page structure ever changes underneath us.
+# goldprice.org 403'd as bot traffic and metals.live's endpoint is
+# dead — gold-api.com confirmed live 2026-09-08 (curl'd both
+# endpoints, clean {"price": ...} response).
 GOLD_API_XAU_URL = "https://api.gold-api.com/price/XAU"
 GOLD_API_XAG_URL = "https://api.gold-api.com/price/XAG"
 
@@ -98,25 +106,62 @@ def fetch_kt():
     return float(gold), float(silver)
 
 
-def fetch_kitco():
+def _fetch_kitco_page():
     """
-    Gold + silver spot, AED-converted.
-
-    Uses gold-api.com — a free, no-auth JSON endpoint confirmed live
-    2026-09-08 (curl https://api.gold-api.com/price/XAU and /XAG both
-    returned clean responses). One request per metal:
-        {"currency":"USD","name":"Gold","price":4403.6,"symbol":"XAU", ...}
-
-    Returns (gold_oz_aed: float, silver_oz_aed: float).
+    Pulls gold + silver USD/oz mid price directly from Kitco's own
+    page JSON. One request gets both metals (unlike gold-api.com,
+    which needs one call per metal).
+    Returns (gold_usd_oz, silver_usd_oz).
     """
+    html = _fetch_url(KITCO_URL)
+    m = re.search(
+        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S,
+    )
+    if not m:
+        raise RuntimeError("Kitco: page structure changed (no __NEXT_DATA__)")
+    data = json.loads(m.group(1))
+    queries = (
+        data.get("props", {}).get("pageProps", {})
+        .get("dehydratedState", {}).get("queries", [])
+    )
+    metals = next(
+        (q["state"]["data"] for q in queries if "gold" in q.get("state", {}).get("data", {})),
+        None,
+    )
+    if not metals:
+        raise RuntimeError("Kitco: no gold/silver data found in page JSON")
+
+    gold_mid = metals.get("gold", {}).get("results", [{}])[0].get("mid")
+    silver_mid = metals.get("silver", {}).get("results", [{}])[0].get("mid")
+    if not gold_mid or not silver_mid:
+        raise RuntimeError("Kitco: gold/silver mid price missing")
+    return float(gold_mid), float(silver_mid)
+
+
+def _fetch_gold_api():
+    """Fallback: gold-api.com, one request per metal."""
     def _fetch_price(url: str) -> float:
         req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read().decode("utf-8", "ignore"))
         return float(data["price"])
 
-    gold_usd_oz = _fetch_price(GOLD_API_XAU_URL)
-    silver_usd_oz = _fetch_price(GOLD_API_XAG_URL)
+    return _fetch_price(GOLD_API_XAU_URL), _fetch_price(GOLD_API_XAG_URL)
+
+
+def fetch_kitco():
+    """
+    Gold + silver spot, AED-converted. Tries Kitco's own page first
+    (see _fetch_kitco_page), falls back to gold-api.com if Kitco's
+    page structure ever changes underneath us.
+
+    Returns (gold_oz_aed: float, silver_oz_aed: float).
+    """
+    try:
+        gold_usd_oz, silver_usd_oz = _fetch_kitco_page()
+    except Exception as e:
+        print(f"WARNING: Kitco page fetch failed ({e}), falling back to gold-api.com", file=sys.stderr)
+        gold_usd_oz, silver_usd_oz = _fetch_gold_api()
 
     if not (1000 < gold_usd_oz < 8000):
         raise RuntimeError(f"Kitco: implausible gold price {gold_usd_oz}")
