@@ -25,7 +25,6 @@
 // against this widget's own last refresh.
 
 const GOLD       = new Color("#f9c416")
-const GOLD_DIM   = new Color("#f9c416", 0.45)
 const PURPLE     = new Color("#c4b5fd")
 const PURPLE_DIM = new Color("#c4b5fd", 0.40)
 const BG_DEEP    = new Color("#0d0014")
@@ -36,6 +35,7 @@ const GREEN      = new Color("#22c55e")
 const DATA_URL = "https://raw.githubusercontent.com/rkadel11/metal-price-log/main/data/current.json"
 const KITCO_URL = "https://www.kitco.com/price/precious-metals"
 const GOLD_API_XAU_URL = "https://api.gold-api.com/price/XAU"
+const GOLD_API_XAG_URL = "https://api.gold-api.com/price/XAG"
 const OZ_TO_GRAMS = 31.1034768
 const AED_PER_USD = 3.6725
 
@@ -63,26 +63,39 @@ async function fetchKitcoLive() {
   if (!m) throw new Error("Kitco page structure changed (no __NEXT_DATA__)")
   const data = JSON.parse(m[1])
   const queries = data?.props?.pageProps?.dehydratedState?.queries || []
-  const goldQuery = queries.find(q => q?.state?.data?.gold)
-  const gold = goldQuery?.state?.data?.gold?.results?.[0]
+  const metalsQuery = queries.find(q => q?.state?.data?.gold)
+  const gold = metalsQuery?.state?.data?.gold?.results?.[0]
+  const silver = metalsQuery?.state?.data?.silver?.results?.[0]
   if (!gold || !(gold.mid > 0)) throw new Error("Kitco gold data missing/invalid")
   return {
     usdOz: gold.mid,
     usdGm: gold.mid / OZ_TO_GRAMS,
     changePercentage: gold.changePercentage,
+    silverUsdOz: silver && silver.mid > 0 ? silver.mid : null,
   }
 }
 
 // Fallback if Kitco's page structure ever changes underneath us.
 // Fetched fresh on every widget refresh -- not cached in
-// current.json, which only updates 3x/day.
+// current.json, which only updates 3x/day. Two requests (gold-api.com
+// needs one call per metal, unlike Kitco's single page).
 async function fetchLiveUsdGold() {
-  const req = new Request(GOLD_API_XAU_URL)
-  req.timeoutInterval = 10
-  const json = await req.loadJSON()
-  const usdOz = parseFloat(json.price)
-  if (!(usdOz > 0)) throw new Error("bad price from gold-api.com")
-  return { usdOz, usdGm: usdOz / OZ_TO_GRAMS, changePercentage: null }
+  async function priceFrom(url) {
+    const req = new Request(url)
+    req.timeoutInterval = 10
+    const json = await req.loadJSON()
+    const price = parseFloat(json.price)
+    return price > 0 ? price : null
+  }
+  const usdOz = await priceFrom(GOLD_API_XAU_URL)
+  if (!usdOz) throw new Error("bad gold price from gold-api.com")
+  let silverUsdOz = null
+  try {
+    silverUsdOz = await priceFrom(GOLD_API_XAG_URL)
+  } catch (e) {
+    // silver fallback failing isn't fatal -- gold is the primary spot line
+  }
+  return { usdOz, usdGm: usdOz / OZ_TO_GRAMS, changePercentage: null, silverUsdOz }
 }
 
 // Fallback only -- used when Kitco's own changePercentage isn't
@@ -137,7 +150,8 @@ function extractPrices(data) {
   if (latest) {
     return {
       time: latest.time,
-      ktGoldGm: latest.gold.kheeljtimes_gms_24k,
+      ktGold24k: latest.gold.kheeljtimes_gms_24k,
+      ktGold18k: latest.gold.kheeljtimes_gms_18k,
       kitcoGoldOz: latest.gold.kitco_oz,
       kitcoGoldGm: latest.gold.kitco_gms_24k,
       ktSilverKg: latest.silver.kheeljtimes_kg,
@@ -147,7 +161,8 @@ function extractPrices(data) {
   }
   return {
     time: data.last_updated,
-    ktGoldGm: data.gold?.kheeljtimes_gms_24k?.high ?? null,
+    ktGold24k: data.gold?.kheeljtimes_gms_24k?.high ?? null,
+    ktGold18k: data.gold?.kheeljtimes_gms_18k?.high ?? null,
     kitcoGoldOz: data.gold?.kitco_oz?.high ?? null,
     kitcoGoldGm: data.gold?.kitco_gms_24k?.high ?? null,
     ktSilverKg: data.silver?.kheeljtimes_kg?.high ?? null,
@@ -163,13 +178,6 @@ const fmtTime = iso => {
   return new Date(iso).toLocaleTimeString("en-AE", { hour: "2-digit", minute: "2-digit", hour12: false })
 }
 
-function goldDivider(w) {
-  const d = w.addStack()
-  d.size = new Size(0, 1)
-  d.backgroundColor = GOLD_DIM
-  d.cornerRadius = 1
-}
-
 // ── Build — tuned for 360×169pt ───────────────────────
 async function buildWidget(p) {
   const w = new ListWidget()
@@ -178,17 +186,12 @@ async function buildWidget(p) {
   w.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000)
   w.url = "scriptable:///run/AthenaGold"
 
-  // ── HEADER ────────────────────────────────────────────
+  // ── TOP ROW: time + refresh only (no title bar -- the section
+  // headers below name the content instead) ─────────────────────
   const hdr = w.addStack()
   hdr.layoutHorizontally()
   hdr.centerAlignContent()
-
   hdr.addSpacer()
-  const ttl = hdr.addText("⬡  GOLD RATES  ⬡")
-  ttl.textColor = GOLD
-  ttl.font = Font.boldSystemFont(13)
-  hdr.addSpacer()
-
   const tm = hdr.addText(fmtTime(p.time))
   tm.textColor = p.isLive ? PURPLE : new Color("#a78bfa", 0.6)
   tm.font = Font.systemFont(10)
@@ -197,114 +200,105 @@ async function buildWidget(p) {
   ref.textColor = GOLD
   ref.font = Font.boldSystemFont(13)
 
-  w.addSpacer(4)
-  goldDivider(w)
-  w.addSpacer(4)
-
-  // ── SPOT (live USD, fetched fresh this refresh) ────────
-  const spot = w.addStack()
-  spot.layoutHorizontally()
-
-  const ozB = spot.addStack()
-  ozB.layoutVertically()
-  const ozL = ozB.addText(p.liveSpot ? "Spot /oz" : "Spot /oz (cached)")
-  ozL.textColor = PURPLE_DIM
-  ozL.font = Font.systemFont(8)
-  ozB.addSpacer(2)
-  const ozRow = ozB.addStack()
-  ozRow.layoutHorizontally()
-  ozRow.centerAlignContent()
-  const ozU = ozRow.addText("$ " + f(p.usdOz))
-  ozU.textColor = GOLD
-  ozU.font = Font.boldSystemFont(13)
-  if (p.direction === "up" || p.direction === "down") {
-    ozRow.addSpacer(4)
-    const changeColor = p.direction === "up" ? GREEN : RED
-    const arrowChar = p.direction === "up" ? "▲" : "▼"
-    const label = p.pct != null ? `${arrowChar} ${Math.abs(p.pct).toFixed(2)}%` : arrowChar
-    const arrow = ozRow.addText(label)
-    arrow.textColor = changeColor
-    arrow.font = Font.boldSystemFont(10)
-  }
-
-  spot.addSpacer()
-
-  const gmB = spot.addStack()
-  gmB.layoutVertically()
-  const gmL = gmB.addText(p.liveSpot ? "Spot /gm" : "Spot /gm (cached)")
-  gmL.textColor = PURPLE_DIM
-  gmL.font = Font.systemFont(8)
-  gmL.rightAlignText()
-  gmB.addSpacer(2)
-  const gmU = gmB.addText("$ " + f(p.usdGm))
-  gmU.textColor = GOLD
-  gmU.font = Font.boldSystemFont(13)
-  gmU.rightAlignText()
-
-  w.addSpacer(4)
-  goldDivider(w)
   w.addSpacer(3)
 
-  // ── COLUMN HEADERS ─────────────────────────────────────
-  const ch = w.addStack()
-  ch.layoutHorizontally()
-  const sp = ch.addText("        ")
-  sp.font = Font.systemFont(8)
-  ch.addSpacer()
-  for (const lbl of ["KT", "Kitco"]) {
-    const t = ch.addText(lbl)
-    t.textColor = PURPLE_DIM
-    t.font = Font.boldSystemFont(8)
-    ch.addSpacer()
+  const colWidth = 161
+
+  function sectionHeader(text) {
+    const t = w.addText(text)
+    t.textColor = GOLD
+    t.font = Font.boldSystemFont(10)
   }
 
+  function metricRow(container, label, valueText, valueColor, changeText, changeColor) {
+    const row = container.addStack()
+    row.layoutHorizontally()
+    const l = row.addText(label)
+    l.textColor = PURPLE_DIM
+    l.font = Font.systemFont(8)
+    row.addSpacer()
+    if (changeText) {
+      const c = row.addText(changeText)
+      c.textColor = changeColor
+      c.font = Font.systemFont(8)
+      row.addSpacer(3)
+    }
+    const v = row.addText(valueText)
+    v.textColor = valueColor
+    v.font = Font.boldSystemFont(11)
+  }
+
+  // ── GOLD PRICE ──────────────────────────────────────────
+  sectionHeader("GOLD PRICE")
   w.addSpacer(3)
 
-  // ── GOLD ROW (AED/gm) ──────────────────────────────────
-  const rGold = w.addStack()
-  rGold.layoutHorizontally()
-  rGold.backgroundColor = BG_CARD
-  rGold.cornerRadius = 7
-  rGold.setPadding(4, 12, 4, 12)
-  const lGold = rGold.addText("Gold/gm")
-  lGold.textColor = GOLD
-  lGold.font = Font.boldSystemFont(12)
-  rGold.addSpacer()
-  for (const val of [p.ktGoldGm, p.kitcoGoldGm]) {
-    const t = rGold.addText(f(val))
-    t.textColor = PURPLE
-    t.font = Font.boldSystemFont(12)
-    rGold.addSpacer()
-  }
+  const goldCols = w.addStack()
+  goldCols.layoutHorizontally()
 
+  const kitcoCol = goldCols.addStack()
+  kitcoCol.layoutVertically()
+  kitcoCol.backgroundColor = BG_CARD
+  kitcoCol.cornerRadius = 7
+  kitcoCol.setPadding(5, 8, 5, 8)
+  kitcoCol.size = new Size(colWidth, 0)
+  const kitcoTitle = kitcoCol.addText(p.liveSpot ? "Kitco (live)" : "Kitco (cached)")
+  kitcoTitle.textColor = PURPLE
+  kitcoTitle.font = Font.boldSystemFont(9)
+  kitcoCol.addSpacer(3)
+  const changeText = (p.direction === "up" || p.direction === "down")
+    ? `${p.direction === "up" ? "▲" : "▼"}${p.pct != null ? " " + Math.abs(p.pct).toFixed(2) + "%" : ""}`
+    : null
+  const changeColor = p.direction === "up" ? GREEN : RED
+  metricRow(kitcoCol, "Spot/oz", "$" + f(p.usdOz), GOLD, changeText, changeColor)
+  kitcoCol.addSpacer(2)
+  metricRow(kitcoCol, "Spot/gm", "$" + f(p.usdGm), GOLD, null, null)
+
+  goldCols.addSpacer(6)
+
+  const ktCol = goldCols.addStack()
+  ktCol.layoutVertically()
+  ktCol.backgroundColor = BG_CARD
+  ktCol.cornerRadius = 7
+  ktCol.setPadding(5, 8, 5, 8)
+  ktCol.size = new Size(colWidth, 0)
+  const ktTitle = ktCol.addText("Kheeljtimes")
+  ktTitle.textColor = PURPLE
+  ktTitle.font = Font.boldSystemFont(9)
+  ktCol.addSpacer(3)
+  metricRow(ktCol, "24K", f(p.ktGold24k), GOLD, null, null)
+  ktCol.addSpacer(2)
+  metricRow(ktCol, "18K", f(p.ktGold18k), GOLD, null, null)
+
+  w.addSpacer(6)
+
+  // ── SILVER PRICE ────────────────────────────────────────
+  // Bare values only, no repeated Kitco/KT labels -- position under
+  // the Gold Price columns above already identifies each one.
+  sectionHeader("SILVER PRICE")
   w.addSpacer(3)
 
-  // ── SILVER ROW (AED/kg) ────────────────────────────────
-  const rSilver = w.addStack()
-  rSilver.layoutHorizontally()
-  rSilver.backgroundColor = BG_CARD
-  rSilver.cornerRadius = 7
-  rSilver.setPadding(4, 12, 4, 12)
-  const lSilver = rSilver.addText("Silver/kg")
-  lSilver.textColor = GOLD
-  lSilver.font = Font.boldSystemFont(12)
-  rSilver.addSpacer()
-  for (const val of [p.ktSilverKg, p.kitcoSilverKg]) {
-    const t = rSilver.addText(f(val))
-    t.textColor = PURPLE
-    t.font = Font.boldSystemFont(12)
-    rSilver.addSpacer()
-  }
+  const silverCols = w.addStack()
+  silverCols.layoutHorizontally()
 
-  // ── FOOTER ──────────────────────────────────────────────
-  w.addSpacer(4)
-  const footerText = p.isLive
-    ? "metal-price-log · tap to refresh"
-    : "showing today's high (no live reading yet)"
-  const ftr = w.addText(footerText)
-  ftr.textColor = PURPLE_DIM
-  ftr.font = Font.systemFont(8)
-  ftr.centerAlignText()
+  const kitcoSilverBox = silverCols.addStack()
+  kitcoSilverBox.backgroundColor = BG_CARD
+  kitcoSilverBox.cornerRadius = 7
+  kitcoSilverBox.setPadding(5, 8, 5, 8)
+  kitcoSilverBox.size = new Size(colWidth, 0)
+  const kitcoSilverVal = kitcoSilverBox.addText("$" + f(p.silverUsdOz))
+  kitcoSilverVal.textColor = PURPLE
+  kitcoSilverVal.font = Font.boldSystemFont(11)
+
+  silverCols.addSpacer(6)
+
+  const ktSilverBox = silverCols.addStack()
+  ktSilverBox.backgroundColor = BG_CARD
+  ktSilverBox.cornerRadius = 7
+  ktSilverBox.setPadding(5, 8, 5, 8)
+  ktSilverBox.size = new Size(colWidth, 0)
+  const ktSilverVal = ktSilverBox.addText(f(p.ktSilverKg))
+  ktSilverVal.textColor = PURPLE
+  ktSilverVal.font = Font.boldSystemFont(11)
 
   return w
 }
@@ -314,7 +308,7 @@ function errorWidget(msg) {
   const w = new ListWidget()
   w.backgroundColor = BG_DEEP
   w.setPadding(16, 16, 16, 16)
-  const t = w.addText("⬡  GOLD RATES  ⬡")
+  const t = w.addText("⬡  GOLD & SILVER PRICE  ⬡")
   t.textColor = GOLD
   t.font = Font.boldSystemFont(13)
   w.addSpacer(8)
@@ -354,6 +348,15 @@ try {
     prices.usdGm = prices.kitcoGoldGm != null ? prices.kitcoGoldGm / AED_PER_USD : null
   }
 
+  if (live && live.silverUsdOz != null) {
+    prices.silverUsdOz = live.silverUsdOz
+  } else if (prices.kitcoSilverKg != null) {
+    // Cached AED/kg -> USD/oz via the fixed peg and troy-oz conversion.
+    prices.silverUsdOz = (prices.kitcoSilverKg / AED_PER_USD) * (OZ_TO_GRAMS / 1000)
+  } else {
+    prices.silverUsdOz = null
+  }
+
   if (live && live.changePercentage != null) {
     // Kitco's own official change vs. the previous close.
     const pct = live.changePercentage
@@ -369,7 +372,7 @@ try {
   }
   writeLastOz(prices.usdOz)
 
-  widget = (prices.ktGoldGm || prices.kitcoGoldGm)
+  widget = (prices.ktGold24k || prices.kitcoGoldGm)
     ? await buildWidget(prices)
     : errorWidget("No price data yet\nCheck metal-price-log repo")
 } catch (e) {
