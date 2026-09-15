@@ -64,28 +64,35 @@ def _fetch_url(url: str) -> str:
         return r.read().decode("utf-8", "ignore")
 
 
-def fetch_kt():
-    """
-    Fetch Khaleej Times 24K gold (Gms) and Silver Kilo (AED).
-    Ported directly from the working AppleScript/Python logic in
-    the "Gold & Silver Pricess Kheeljtimes" shortcut — same regex,
-    same "prefer the latest session column" behavior.
-    Returns (gold_gms_24k: float, silver_kg: float).
-    """
-    html = _fetch_url(KT_URL)
-
-    gold = None
+def _fetch_kt_karat(html: str, karat_label: str):
+    """Same regex/column-preference logic for any karat row (24K, 18K, ...)."""
     m = re.search(
-        r">\s*24K\s*<(?:(?!</tr>).)*?>\s*" + NUM + r"\s*<(?:(?!</tr>).)*?>\s*"
+        r">\s*" + karat_label + r"\s*<(?:(?!</tr>).)*?>\s*" + NUM + r"\s*<(?:(?!</tr>).)*?>\s*"
         + NUM + r"\s*<(?:(?!</tr>).)*?(?:>\s*" + NUM + r"\s*<)?",
         html,
         re.I | re.S,
     )
-    if m:
-        g1 = (m.group(1) or "").replace(",", "").strip()
-        g2 = (m.group(2) or "").replace(",", "").strip()
-        g3 = (m.group(3) or "").replace(",", "").strip() if m.lastindex and m.lastindex >= 3 else ""
-        gold = (g3 or g2 or g1) or None
+    if not m:
+        return None
+    g1 = (m.group(1) or "").replace(",", "").strip()
+    g2 = (m.group(2) or "").replace(",", "").strip()
+    g3 = (m.group(3) or "").replace(",", "").strip() if m.lastindex and m.lastindex >= 3 else ""
+    val = (g3 or g2 or g1) or None
+    return float(val) if val else None
+
+
+def fetch_kt():
+    """
+    Fetch Khaleej Times 24K + 18K gold (Gms) and Silver Kilo (AED).
+    Ported directly from the working AppleScript/Python logic in
+    the "Gold & Silver Pricess Kheeljtimes" shortcut — same regex,
+    same "prefer the latest session column" behavior.
+    Returns (gold_gms_24k: float, gold_gms_18k: float, silver_kg: float).
+    """
+    html = _fetch_url(KT_URL)
+
+    gold_24k = _fetch_kt_karat(html, "24K")
+    gold_18k = _fetch_kt_karat(html, "18K")
 
     silver = None
     s = re.search(
@@ -98,12 +105,14 @@ def fetch_kt():
         s2 = (s.group(2) or "").replace(",", "").strip()
         silver = (s2 or s1) or None
 
-    if not gold:
+    if not gold_24k:
         raise RuntimeError("KT: could not extract Gold 24K")
+    if not gold_18k:
+        raise RuntimeError("KT: could not extract Gold 18K")
     if not silver:
         raise RuntimeError("KT: could not extract Silver Kilo(AED)")
 
-    return float(gold), float(silver)
+    return gold_24k, gold_18k, float(silver)
 
 
 def _fetch_kitco_page():
@@ -211,6 +220,7 @@ def blank_day(today_str: str) -> dict:
         "last_updated": None,
         "gold": {
             "kheeljtimes_gms_24k": {"high": None, "last_seen": None},
+            "kheeljtimes_gms_18k": {"high": None, "last_seen": None},
             "kitco_oz": {"high": None, "last_seen": None},
             "kitco_gms_24k": {"high": None, "last_seen": None},
         },
@@ -230,13 +240,17 @@ def blank_day(today_str: str) -> dict:
 
 
 def update_high(day_data: dict, section: str, key: str, new_value: float, ts: str):
-    entry = day_data[section][key]
+    # setdefault, not a direct index -- day_data may have been loaded
+    # from an existing current.json written before this field existed
+    # (confirmed 2026-09-15: adding kheeljtimes_gms_18k broke on an
+    # in-progress day started under the old schema).
+    entry = day_data[section].setdefault(key, {"high": None, "last_seen": None})
     if entry["high"] is None or new_value > entry["high"]:
         entry["high"] = new_value
     entry["last_seen"] = ts
 
 
-def record_reading(day_data: dict, slot: str, ts: str, kt_gold, kt_silver,
+def record_reading(day_data: dict, slot: str, ts: str, kt_gold_24k, kt_gold_18k, kt_silver,
                     kitco_gold_oz, kitco_gold_gms, kitco_silver_kg):
     """Overwrites (not accumulates) this slot's reading -- if the same
     window's run fires twice (e.g. a manual re-run), the slot just
@@ -245,7 +259,8 @@ def record_reading(day_data: dict, slot: str, ts: str, kt_gold, kt_silver,
     day_data["readings"][slot] = {
         "time": ts,
         "gold": {
-            "kheeljtimes_gms_24k": kt_gold,
+            "kheeljtimes_gms_24k": kt_gold_24k,
+            "kheeljtimes_gms_18k": kt_gold_18k,
             "kitco_oz": kitco_gold_oz,
             "kitco_gms_24k": kitco_gold_gms,
         },
@@ -300,10 +315,11 @@ def main():
 
     errors = []
 
-    kt_gold = kt_silver = None
+    kt_gold_24k = kt_gold_18k = kt_silver = None
     try:
-        kt_gold, kt_silver = fetch_kt()
-        update_high(day_data, "gold", "kheeljtimes_gms_24k", kt_gold, ts)
+        kt_gold_24k, kt_gold_18k, kt_silver = fetch_kt()
+        update_high(day_data, "gold", "kheeljtimes_gms_24k", kt_gold_24k, ts)
+        update_high(day_data, "gold", "kheeljtimes_gms_18k", kt_gold_18k, ts)
         update_high(day_data, "silver", "kheeljtimes_kg", kt_silver, ts)
     except Exception as e:
         errors.append(f"KT fetch failed: {e}")
@@ -324,7 +340,7 @@ def main():
     # slot entry, just with the failed source's fields left None.
     record_reading(
         day_data, dubai_slot(now), ts,
-        kt_gold, kt_silver, kitco_gold_oz_aed, kitco_gold_gms, kitco_silver_kg,
+        kt_gold_24k, kt_gold_18k, kt_silver, kitco_gold_oz_aed, kitco_gold_gms, kitco_silver_kg,
     )
     update_kitco_open_close(day_data)
 
