@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """
-metal-price-log / sync_history_numbers.py
+gold-smith / sync_history_numbers.py
 
 LOCAL Mac-only script -- NOT part of the GitHub Actions workflow.
 Meant to be pasted into a single "Run Shell Script" action inside a
-macOS Shortcut, triggered 3x/day (~10:15am/2:15pm/6:15pm Dubai -- a few
-minutes after each GitHub Actions fetch, so current.json has already
-updated) via Personal Automations on the Mac Mini (24/7).
+macOS Shortcut, triggered TWICE DAILY (~2:30pm and ~6:15pm Dubai -- a
+few minutes after that day's 2pm and 6pm GitHub Actions fetches, so
+current.json's morning/afternoon(/evening) readings are already in)
+via two Personal Automations on the Mac Mini (24/7), added 2026-09-17
+so the afternoon reading gets saved the same day rather than only
+showing up in that evening's run. Safe to trigger more often than
+that too -- upserting by date means a run just overwrites the day's
+row with whatever's newest, so an extra run is a no-op, not a
+duplicate.
 
 Writes into "gold silver price history.numbers", one sheet per year,
 ONE ROW PER CALENDAR DAY across three tables:
@@ -49,7 +55,7 @@ import urllib.request
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-REPO = "rkadel11/metal-price-log"
+REPO = "rkadel11/gold-smith"
 API_HISTORY_URL = f"https://api.github.com/repos/{REPO}/contents/data/history"
 RAW_CURRENT_URL = f"https://raw.githubusercontent.com/{REPO}/main/data/current.json"
 
@@ -61,7 +67,7 @@ DOC_FILENAME = "gold silver price history.numbers"
 LOG_PATH = os.path.expanduser("~/Library/Logs/gold_silver_history_sync.log")
 DUBAI = ZoneInfo("Asia/Dubai")
 
-MIN_HEADROOM_YEARS = 2
+MIN_HEADROOM_YEARS = 1
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 TIMEOUT = 20
 APPLESCRIPT_TIMEOUT = 480
