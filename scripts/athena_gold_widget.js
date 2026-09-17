@@ -265,7 +265,7 @@ async function buildWidget(p) {
   kitcoCol.cornerRadius = 7
   kitcoCol.setPadding(5, 8, 5, 8)
   kitcoCol.size = new Size(colWidth, 0)
-  const kitcoTitle = kitcoCol.addText(p.liveSpot ? "Kitco (live)" : "Kitco (cached)")
+  const kitcoTitle = kitcoCol.addText("Kitco")
   kitcoTitle.textColor = PURPLE
   kitcoTitle.font = Font.boldSystemFont(9)
   kitcoCol.addSpacer(3)
@@ -335,16 +335,13 @@ try {
   let live = null
   try {
     live = await fetchKitcoLive()
-    prices.liveSpot = true
   } catch (e1) {
     try {
       live = await fetchLiveUsdGold()
-      prices.liveSpot = true
     } catch (e2) {
       // Both live sources failed -- fall back to converting the
       // cached AED value back to USD via the fixed peg, rather than
       // showing nothing.
-      prices.liveSpot = false
     }
   }
 
