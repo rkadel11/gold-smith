@@ -213,9 +213,9 @@ async function buildWidget(p) {
 
   const colWidth = 161
 
-  function sectionHeader(text) {
+  function sectionHeader(text, color = GOLD) {
     const t = w.addText(text)
-    t.textColor = GOLD
+    t.textColor = color
     t.font = Font.boldSystemFont(10)
   }
 
@@ -283,7 +283,7 @@ async function buildWidget(p) {
   // ── SILVER PRICE ────────────────────────────────────────
   // Bare values only, no repeated Kitco/KT labels -- position under
   // the Gold Price columns above already identifies each one.
-  sectionHeader("SILVER PRICE")
+  sectionHeader("SILVER PRICE", PURPLE)
   w.addSpacer(3)
 
   const silverCols = w.addStack()
