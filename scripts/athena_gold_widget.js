@@ -192,11 +192,13 @@ async function buildWidget(p) {
   w.refreshAfterDate = new Date(Date.now() + 3 * 60 * 60 * 1000)
   w.url = "scriptable:///run/AthenaGold"
 
-  // ── TOP ROW: time + refresh only (no title bar -- the section
-  // headers below name the content instead) ─────────────────────
+  // ── TOP ROW: title, then time + refresh ─────────────────────
   const hdr = w.addStack()
   hdr.layoutHorizontally()
   hdr.centerAlignContent()
+  const title = hdr.addText("METAL PRICES")
+  title.textColor = GOLD
+  title.font = Font.boldSystemFont(11)
   hdr.addSpacer()
   const tm = hdr.addText(fmtTime(p.time))
   tm.textColor = p.isLive ? PURPLE : new Color("#a78bfa", 0.6)
