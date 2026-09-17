@@ -196,6 +196,7 @@ async function buildWidget(p) {
   const hdr = w.addStack()
   hdr.layoutHorizontally()
   hdr.centerAlignContent()
+  hdr.addSpacer()
   const title = hdr.addText("METAL PRICES")
   title.textColor = GOLD
   title.font = Font.boldSystemFont(11)
