@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-metal-price-log / fetch_prices.py
+gold-smith / fetch_prices.py
 
 Runs 3x/day via GitHub Actions (10am / 2pm / 6pm Dubai time).
 Fetches KT (Khaleej Times) and Kitco gold/silver rates, keeps the
@@ -18,6 +18,7 @@ import re
 import sys
 import urllib.request
 from datetime import datetime
+from html import unescape as unescape_html
 from zoneinfo import ZoneInfo
 
 DUBAI_TZ = ZoneInfo("Asia/Dubai")
@@ -55,64 +56,71 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-NUM = r"([0-9][0-9,]*\.?[0-9]*)"
-
-
 def _fetch_url(url: str) -> str:
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=25) as r:
         return r.read().decode("utf-8", "ignore")
 
 
-def _fetch_kt_karat(html: str, karat_label: str):
-    """Same regex/column-preference logic for any karat row (24K, 18K, ...)."""
-    m = re.search(
-        r">\s*" + karat_label + r"\s*<(?:(?!</tr>).)*?>\s*" + NUM + r"\s*<(?:(?!</tr>).)*?>\s*"
-        + NUM + r"\s*<(?:(?!</tr>).)*?(?:>\s*" + NUM + r"\s*<)?",
-        html,
-        re.I | re.S,
-    )
-    if not m:
-        return None
-    g1 = (m.group(1) or "").replace(",", "").strip()
-    g2 = (m.group(2) or "").replace(",", "").strip()
-    g3 = (m.group(3) or "").replace(",", "").strip() if m.lastindex and m.lastindex >= 3 else ""
-    val = (g3 or g2 or g1) or None
-    return float(val) if val else None
+def _kt_slot_values(rates: list, type_label: str) -> dict:
+    """rates is the page's own list of {"type": ..., "morning": ...,
+    "afternoon": ..., "evening": ..., "yesterday": ...} rows (silver
+    rows have no "afternoon" key at all). Returns {"morning": float|
+    None, "afternoon": float|None, "evening": float|None} for the row
+    matching type_label, reading each slot's OWN labeled value instead
+    of guessing which slot a single "latest" number belongs to."""
+    row = next((r for r in rates if r.get("type") == type_label), None)
+    out = {}
+    for slot in SLOTS:
+        raw = (row.get(slot) if row else "") or ""
+        raw = raw.replace(",", "").strip()
+        out[slot] = float(raw) if raw else None
+    return out
 
 
 def fetch_kt():
     """
-    Fetch Khaleej Times 24K + 18K gold (Gms) and Silver Kilo (AED).
-    Ported directly from the working AppleScript/Python logic in
-    the "Gold & Silver Pricess Kheeljtimes" shortcut — same regex,
-    same "prefer the latest session column" behavior.
-    Returns (gold_gms_24k: float, gold_gms_18k: float, silver_kg: float).
+    Fetch Khaleej Times 24K + 18K gold (Gms) and Silver Kilo (AED),
+    per official morning/afternoon/evening slot.
+
+    Parsed from the page's own embedded data-page JSON (an Inertia.js
+    SSR payload: <div id="app" data-page="{...html-entity-encoded
+    JSON...}">, same shape as Kitco's __NEXT_DATA__ below) rather than
+    regex-scraping the rendered HTML table. The old regex grabbed
+    "whichever numbers follow the karat label" and guessed the slot
+    from our own run's wall-clock hour -- confirmed 2026-09-17 that
+    this silently drifted a slot behind the page's actual labels (e.g.
+    an early run capturing the still-blank "evening" cell's neighbor,
+    which was really "yesterday"). Reading KT's own morning/afternoon/
+    evening labels directly removes that guesswork entirely.
+
+    Returns three dicts, each {"morning": float|None, "afternoon":
+    float|None, "evening": float|None} -- KT's silver table has no
+    afternoon column, so that key is always None there.
     """
     html = _fetch_url(KT_URL)
 
-    gold_24k = _fetch_kt_karat(html, "24K")
-    gold_18k = _fetch_kt_karat(html, "18K")
+    m = re.search(r'data-page="(.*?)"', html, re.S)
+    if not m:
+        raise RuntimeError("KT: page structure changed (no data-page attribute found)")
+    data = json.loads(unescape_html(m.group(1)))
+    props = data.get("props", {})
 
-    silver = None
-    s = re.search(
-        r">\s*Kilo\s*\(AED\)\s*<(?:(?!</tr>).)*?>\s*" + NUM + r"\s*<(?:(?!</tr>).)*?>\s*" + NUM,
-        html,
-        re.I | re.S,
-    )
-    if s:
-        s1 = (s.group(1) or "").replace(",", "").strip()
-        s2 = (s.group(2) or "").replace(",", "").strip()
-        silver = (s2 or s1) or None
+    gold_rates = props.get("goldRates", {}).get("rates", [])
+    silver_rates = props.get("silverRates", {}).get("rates", [])
 
-    if not gold_24k:
+    gold_24k = _kt_slot_values(gold_rates, "24K")
+    gold_18k = _kt_slot_values(gold_rates, "18K")
+    silver = _kt_slot_values(silver_rates, "Kilo (AED)")
+
+    if not any(v is not None for v in gold_24k.values()):
         raise RuntimeError("KT: could not extract Gold 24K")
-    if not gold_18k:
+    if not any(v is not None for v in gold_18k.values()):
         raise RuntimeError("KT: could not extract Gold 18K")
-    if not silver:
+    if not any(v is not None for v in silver.values()):
         raise RuntimeError("KT: could not extract Silver Kilo(AED)")
 
-    return gold_24k, gold_18k, float(silver)
+    return gold_24k, gold_18k, silver
 
 
 def _fetch_kitco_page():
@@ -250,25 +258,24 @@ def update_high(day_data: dict, section: str, key: str, new_value: float, ts: st
     entry["last_seen"] = ts
 
 
-def record_reading(day_data: dict, slot: str, ts: str, kt_gold_24k, kt_gold_18k, kt_silver,
-                    kitco_gold_oz, kitco_gold_gms, kitco_silver_kg):
-    """Overwrites (not accumulates) this slot's reading -- if the same
-    window's run fires twice (e.g. a manual re-run), the slot just
-    reflects the latest one, same as the "high" fields behave."""
-    day_data.setdefault("readings", {slot: None for slot in SLOTS})
-    day_data["readings"][slot] = {
-        "time": ts,
-        "gold": {
-            "kheeljtimes_gms_24k": kt_gold_24k,
-            "kheeljtimes_gms_18k": kt_gold_18k,
-            "kitco_oz": kitco_gold_oz,
-            "kitco_gms_24k": kitco_gold_gms,
-        },
-        "silver": {
-            "kheeljtimes_kg": kt_silver,
-            "kitco_kg": kitco_silver_kg,
-        },
-    }
+def merge_reading(day_data: dict, slot: str, ts: str, gold: dict = None, silver: dict = None):
+    """Sets only the given fields for this slot, leaving whatever else
+    is already there (from a source this call doesn't cover, or a
+    prior run) untouched -- e.g. KT can fill morning/afternoon/evening
+    in one run while Kitco (a continuous spot price, no slots of its
+    own) only ever touches the current wall-clock slot. Re-running the
+    same window still just overwrites with the latest values, same as
+    before."""
+    day_data.setdefault("readings", {s: None for s in SLOTS})
+    entry = day_data["readings"].get(slot) or {"time": ts, "gold": {}, "silver": {}}
+    entry["time"] = ts
+    entry.setdefault("gold", {})
+    entry.setdefault("silver", {})
+    if gold:
+        entry["gold"].update(gold)
+    if silver:
+        entry["silver"].update(silver)
+    day_data["readings"][slot] = entry
 
 
 def update_kitco_open_close(day_data: dict):
@@ -315,12 +322,17 @@ def main():
 
     errors = []
 
-    kt_gold_24k = kt_gold_18k = kt_silver = None
+    kt_gold_24k = kt_gold_18k = kt_silver = {}
     try:
         kt_gold_24k, kt_gold_18k, kt_silver = fetch_kt()
-        update_high(day_data, "gold", "kheeljtimes_gms_24k", kt_gold_24k, ts)
-        update_high(day_data, "gold", "kheeljtimes_gms_18k", kt_gold_18k, ts)
-        update_high(day_data, "silver", "kheeljtimes_kg", kt_silver, ts)
+        for slot_values, section, key in (
+            (kt_gold_24k, "gold", "kheeljtimes_gms_24k"),
+            (kt_gold_18k, "gold", "kheeljtimes_gms_18k"),
+            (kt_silver, "silver", "kheeljtimes_kg"),
+        ):
+            for v in slot_values.values():
+                if v is not None:
+                    update_high(day_data, section, key, v, ts)
     except Exception as e:
         errors.append(f"KT fetch failed: {e}")
 
@@ -335,13 +347,30 @@ def main():
     except Exception as e:
         errors.append(f"Kitco fetch failed: {e}")
 
-    # Record this run as its own timestamped slot regardless of which
-    # source(s) succeeded -- partial data (e.g. KT only) still gets a
-    # slot entry, just with the failed source's fields left None.
-    record_reading(
-        day_data, dubai_slot(now), ts,
-        kt_gold_24k, kt_gold_18k, kt_silver, kitco_gold_oz_aed, kitco_gold_gms, kitco_silver_kg,
-    )
+    # KT publishes its own morning/afternoon/evening slots directly --
+    # backfill whichever of those this fetch found values for,
+    # regardless of what time our own run happens to be.
+    for slot in SLOTS:
+        gold = {}
+        if kt_gold_24k.get(slot) is not None:
+            gold["kheeljtimes_gms_24k"] = kt_gold_24k[slot]
+        if kt_gold_18k.get(slot) is not None:
+            gold["kheeljtimes_gms_18k"] = kt_gold_18k[slot]
+        silver = {}
+        if kt_silver.get(slot) is not None:
+            silver["kheeljtimes_kg"] = kt_silver[slot]
+        if gold or silver:
+            merge_reading(day_data, slot, ts, gold=gold, silver=silver)
+
+    # Kitco is a continuous spot price with no slot labels of its own,
+    # so it still gets bucketed by this run's wall-clock time.
+    if kitco_gold_oz_aed is not None:
+        merge_reading(
+            day_data, dubai_slot(now), ts,
+            gold={"kitco_oz": kitco_gold_oz_aed, "kitco_gms_24k": kitco_gold_gms},
+            silver={"kitco_kg": kitco_silver_kg},
+        )
+
     update_kitco_open_close(day_data)
 
     day_data["last_updated"] = ts
