@@ -224,16 +224,16 @@ async function buildWidget(p) {
     const l = row.addText(label)
     l.textColor = PURPLE_DIM
     l.font = Font.systemFont(8)
+    row.addSpacer(6)
+    const v = row.addText(valueText)
+    v.textColor = valueColor
+    v.font = Font.boldSystemFont(11)
     row.addSpacer()
     if (changeText) {
       const c = row.addText(changeText)
       c.textColor = changeColor
       c.font = Font.systemFont(8)
-      row.addSpacer(3)
     }
-    const v = row.addText(valueText)
-    v.textColor = valueColor
-    v.font = Font.boldSystemFont(11)
   }
 
   // ── GOLD PRICE ──────────────────────────────────────────
