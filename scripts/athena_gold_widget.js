@@ -193,9 +193,15 @@ async function buildWidget(p) {
   w.url = "scriptable:///run/AthenaGold"
 
   // ── TOP ROW: title, then time + refresh ─────────────────────
+  // Two equal flexible spacers around the title only center it within
+  // the space to the LEFT of the time+refresh block, not the full row
+  // -- that block's width pulls the whole thing left. A fixed spacer
+  // matching that block's rough width, placed before everything else,
+  // shifts the balance point back to the row's true center.
   const hdr = w.addStack()
   hdr.layoutHorizontally()
   hdr.centerAlignContent()
+  hdr.addSpacer(50)
   hdr.addSpacer()
   const title = hdr.addText("METAL PRICES")
   title.textColor = GOLD
