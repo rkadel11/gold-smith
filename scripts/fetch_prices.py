@@ -95,8 +95,11 @@ def fetch_kt():
     evening labels directly removes that guesswork entirely.
 
     Returns three dicts, each {"morning": float|None, "afternoon":
-    float|None, "evening": float|None} -- KT's silver table has no
-    afternoon column, so that key is always None there.
+    float|None, "evening": float|None}. KT's silver table has no
+    afternoon column at all (only morning/evening) -- so silver's
+    "afternoon" is filled in by carrying the morning figure forward
+    (see below), confirming silver *was* checked that run rather than
+    leaving the cell blank and indistinguishable from "never checked".
     """
     html = _fetch_url(KT_URL)
 
@@ -112,6 +115,13 @@ def fetch_kt():
     gold_24k = _kt_slot_values(gold_rates, "24K")
     gold_18k = _kt_slot_values(gold_rates, "18K")
     silver = _kt_slot_values(silver_rates, "Kilo (AED)")
+
+    # KT never publishes an "afternoon" silver rate -- carry morning's
+    # figure forward so the afternoon check still records something
+    # (same price = confirmed unchanged, not "we didn't look"). Only
+    # silver needs this: gold genuinely has all three slots published.
+    if silver.get("afternoon") is None and silver.get("morning") is not None:
+        silver["afternoon"] = silver["morning"]
 
     if not any(v is not None for v in gold_24k.values()):
         raise RuntimeError("KT: could not extract Gold 24K")
