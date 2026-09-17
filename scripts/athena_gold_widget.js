@@ -1,8 +1,8 @@
 // Athena Gold Widget — Scriptable iOS
 // Canvas: 360×169pt (Medium widget)
-// Tap to refresh · Auto-updates every 30 min
+// Tap to refresh · Auto-updates every 3 hrs (system budget permitting)
 //
-// v2 — reads metal-price-log's own current.json instead of scraping
+// v2 — reads gold-smith's own current.json instead of scraping
 // KT/GN/Kitco/DC HTML directly. One reliable JSON fetch, no fragile
 // regex parsing, no per-widget scraping duplication — the GitHub
 // Actions pipeline (fetch_prices.py) already does that 3x/day and
@@ -32,7 +32,7 @@ const BG_CARD    = new Color("#160025")
 const RED        = new Color("#ef4444")
 const GREEN      = new Color("#22c55e")
 
-const DATA_URL = "https://raw.githubusercontent.com/rkadel11/metal-price-log/main/data/current.json"
+const DATA_URL = "https://raw.githubusercontent.com/rkadel11/gold-smith/main/data/current.json"
 const KITCO_URL = "https://www.kitco.com/price/precious-metals"
 const GOLD_API_XAU_URL = "https://api.gold-api.com/price/XAU"
 const GOLD_API_XAG_URL = "https://api.gold-api.com/price/XAG"
@@ -128,19 +128,25 @@ function fallbackDirection(currentOz) {
   return { direction, pct }
 }
 
-// Pick whichever of morning/afternoon/evening is chronologically the
+// Pick whichever of evening/afternoon/morning is chronologically the
 // most recent -- gives one consistent "latest" snapshot instead of
 // mixing metrics that were last true at different times of day.
+//
+// Slot order alone decides this (evening is always later in the day
+// than afternoon, which is always later than morning) rather than
+// comparing each reading's "time" field -- a backfill run can touch
+// several slots in one go and stamp them all with that same run's
+// timestamp, which made a strict ">" comparison keep whichever slot
+// was iterated first (morning) on a tie instead of the actual latest
+// one. Confirmed 2026-09-17: this showed a stale morning KT price all
+// day even after afternoon/evening had newer data.
 function latestReading(data) {
-  const slots = ["morning", "afternoon", "evening"]
-  let latest = null
+  const slots = ["evening", "afternoon", "morning"]
   for (const s of slots) {
     const r = data.readings && data.readings[s]
-    if (r && (!latest || new Date(r.time) > new Date(latest.time))) {
-      latest = r
-    }
+    if (r) return r
   }
-  return latest
+  return null
 }
 
 // Falls back to the day's "high" fields if readings aren't present at
@@ -183,7 +189,7 @@ async function buildWidget(p) {
   const w = new ListWidget()
   w.backgroundColor = BG_DEEP
   w.setPadding(8, 16, 8, 16)
-  w.refreshAfterDate = new Date(Date.now() + 30 * 60 * 1000)
+  w.refreshAfterDate = new Date(Date.now() + 3 * 60 * 60 * 1000)
   w.url = "scriptable:///run/AthenaGold"
 
   // ── TOP ROW: time + refresh only (no title bar -- the section
@@ -235,6 +241,22 @@ async function buildWidget(p) {
   const goldCols = w.addStack()
   goldCols.layoutHorizontally()
 
+  const ktCol = goldCols.addStack()
+  ktCol.layoutVertically()
+  ktCol.backgroundColor = BG_CARD
+  ktCol.cornerRadius = 7
+  ktCol.setPadding(5, 8, 5, 8)
+  ktCol.size = new Size(colWidth, 0)
+  const ktTitle = ktCol.addText("Kheeljtimes")
+  ktTitle.textColor = PURPLE
+  ktTitle.font = Font.boldSystemFont(9)
+  ktCol.addSpacer(3)
+  metricRow(ktCol, "24K", f(p.ktGold24k), GOLD, null, null)
+  ktCol.addSpacer(2)
+  metricRow(ktCol, "18K", f(p.ktGold18k), GOLD, null, null)
+
+  goldCols.addSpacer(6)
+
   const kitcoCol = goldCols.addStack()
   kitcoCol.layoutVertically()
   kitcoCol.backgroundColor = BG_CARD
@@ -253,22 +275,6 @@ async function buildWidget(p) {
   kitcoCol.addSpacer(2)
   metricRow(kitcoCol, "Spot/gm", "$" + f(p.usdGm), GOLD, null, null)
 
-  goldCols.addSpacer(6)
-
-  const ktCol = goldCols.addStack()
-  ktCol.layoutVertically()
-  ktCol.backgroundColor = BG_CARD
-  ktCol.cornerRadius = 7
-  ktCol.setPadding(5, 8, 5, 8)
-  ktCol.size = new Size(colWidth, 0)
-  const ktTitle = ktCol.addText("Kheeljtimes")
-  ktTitle.textColor = PURPLE
-  ktTitle.font = Font.boldSystemFont(9)
-  ktCol.addSpacer(3)
-  metricRow(ktCol, "24K", f(p.ktGold24k), GOLD, null, null)
-  ktCol.addSpacer(2)
-  metricRow(ktCol, "18K", f(p.ktGold18k), GOLD, null, null)
-
   w.addSpacer(6)
 
   // ── SILVER PRICE ────────────────────────────────────────
@@ -280,17 +286,6 @@ async function buildWidget(p) {
   const silverCols = w.addStack()
   silverCols.layoutHorizontally()
 
-  const kitcoSilverBox = silverCols.addStack()
-  kitcoSilverBox.backgroundColor = BG_CARD
-  kitcoSilverBox.cornerRadius = 7
-  kitcoSilverBox.setPadding(5, 8, 5, 8)
-  kitcoSilverBox.size = new Size(colWidth, 0)
-  const kitcoSilverVal = kitcoSilverBox.addText("$" + f(p.silverUsdOz))
-  kitcoSilverVal.textColor = PURPLE
-  kitcoSilverVal.font = Font.boldSystemFont(11)
-
-  silverCols.addSpacer(6)
-
   const ktSilverBox = silverCols.addStack()
   ktSilverBox.backgroundColor = BG_CARD
   ktSilverBox.cornerRadius = 7
@@ -299,6 +294,17 @@ async function buildWidget(p) {
   const ktSilverVal = ktSilverBox.addText(f(p.ktSilverKg))
   ktSilverVal.textColor = PURPLE
   ktSilverVal.font = Font.boldSystemFont(11)
+
+  silverCols.addSpacer(6)
+
+  const kitcoSilverBox = silverCols.addStack()
+  kitcoSilverBox.backgroundColor = BG_CARD
+  kitcoSilverBox.cornerRadius = 7
+  kitcoSilverBox.setPadding(5, 8, 5, 8)
+  kitcoSilverBox.size = new Size(colWidth, 0)
+  const kitcoSilverVal = kitcoSilverBox.addText("$" + f(p.silverUsdOz))
+  kitcoSilverVal.textColor = PURPLE
+  kitcoSilverVal.font = Font.boldSystemFont(11)
 
   return w
 }
@@ -374,7 +380,7 @@ try {
 
   widget = (prices.ktGold24k || prices.kitcoGoldGm)
     ? await buildWidget(prices)
-    : errorWidget("No price data yet\nCheck metal-price-log repo")
+    : errorWidget("No price data yet\nCheck gold-smith repo")
 } catch (e) {
   widget = errorWidget("Could not fetch prices\n" + e.message)
 }
