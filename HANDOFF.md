@@ -29,13 +29,24 @@ data/
 .github/workflows/fetch-prices.yml
 ```
 
-## fetch_prices.py (GitHub Actions, 06:00/10:00/14:00 UTC = 10am/2pm/6pm Dubai)
+## fetch_prices.py (GitHub Actions, every 2 hours starting 06:05 Dubai time)
 
-Fetches KT (Khaleej Times) and Kitco gold/silver, writes `data/current.json`,
-archives to `data/history/YYYY-MM.jsonl` on day rollover.
+**Updated 2026-09-18** — schedule changed from 3x/day to every 2 hours (cron
+`5 */2 * * *` UTC), and the retail 24K/18K gold rate now comes from a 2-of-3
+consensus across three independent sources rather than trusting KT alone.
+Fetches KT (Khaleej Times), Gulf News, Dubai City of Gold, and Kitco
+gold/silver, writes `data/current.json`, archives to
+`data/history/YYYY-MM.jsonl` on day rollover, and logs every run's raw
+per-source reading to `data/source_comparison.jsonl` (see below).
 
-- **KT**: scrapes `khaleejtimes.com/gold-forex`, regex-parses **24K and 18K**
-  gold (Gms) + Silver Kilo (AED). Shared helper `_fetch_kt_karat()`.
+- **KT**: scrapes `khaleejtimes.com/gold-forex`, parses **24K and 18K** gold
+  (Gms) + Silver Kilo (AED) from the page's own morning/afternoon/evening
+  columns. Shared helper `_kt_slot_values()`.
+- **Gulf News** / **Dubai City of Gold**: cross-check sources for the 24K/18K
+  retail rate only (no silver, no KT's 3-slot structure) — see
+  `reconcile_retail_gold()`. Added 2026-09-18 after KT briefly disagreed with
+  both of them; also gives resilience against KT going silent (has happened
+  for up to a week before).
 - **Kitco**: primary source is **Kitco's own page**
   (`kitco.com/price/precious-metals`) — their Next.js frontend embeds the
   full server-rendered price state as JSON in a `__NEXT_DATA__` script tag
@@ -44,6 +55,51 @@ archives to `data/history/YYYY-MM.jsonl` on day rollover.
   HTML — confirmed reliable 2026-09-15. Falls back to gold-api.com
   (`api.gold-api.com/price/XAU` and `/XAG`) if Kitco's page structure ever
   changes. AED conversion uses the fixed USD peg (3.6725), not a scraped rate.
+
+### Known gotchas with the source websites (read before touching the scrapers)
+
+All confirmed actually happening, not hypothetical, while building the 3-source
+consensus on 2026-09-18. `fetch_prices.py` now has explicit defenses for each
+(see `MAX_STALENESS`, `GOLD_GRAM_BOUNDS`, `SILVER_KG_BOUNDS` near the top of
+the file) — if you're debugging a "sources disagree" report, check these
+first before assuming a real price discrepancy:
+
+1. **khaleejtimes.com serves CDN-cached snapshots, sometimes 2+ hours stale,
+   even when polled repeatedly.** Confirmed: 3 fetches 10 seconds apart all
+   returned the *identical* generation timestamp and values despite 2+ real
+   hours passing. Polling more often does not help if every request hits the
+   same cached copy. Fixed by cache-busting every scrape request in
+   `_fetch_url()` (unique query param + `Cache-Control`/`Pragma: no-cache`
+   headers) — applies to all four scraped sources automatically. As a second
+   line of defense, `fetch_kt()` and `fetch_gulfnews_gold()` also check the
+   *source's own reported timestamp* against wall clock and reject anything
+   older than `MAX_STALENESS` (90 min), in case cache-busting itself stops
+   working someday or a new caching layer appears. Dubai City of Gold has no
+   structured timestamp, only relative text ("Updated 3 minutes ago") — that
+   gets parsed too, coarser but still functional.
+
+2. **Gulf News DOES publish separate morning/afternoon/evening rates**, not
+   one static "today" figure as originally assumed when `fetch_gulfnews_gold()`
+   was first written. Its `goldApiData` JSON gains an `"afternoon"` key once
+   published; reading only `"morning"` silently returns a stale figure once
+   that happens (caught a false "3-way source split" this way — Gulf News
+   wasn't actually disagreeing, it was just being read wrong). Now walks
+   evening → afternoon → morning, same priority order as `SLOTS` elsewhere.
+
+3. **A site redesign, wrong column, or unit mix-up (e.g. an ounce price where
+   a gram price is expected) can produce a number that parses fine but is
+   nonsense.** `GOLD_GRAM_BOUNDS` (200–1000 AED/gram) and `SILVER_KG_BOUNDS`
+   (2000–20000 AED/kg) reject anything outside those ranges rather than
+   trusting it — deliberately generous so ordinary price movement never trips
+   them, only genuinely broken parses.
+
+4. **Concurrent workflow runs can silently drop fetched data.** Multiple
+   `workflow_dispatch` triggers (e.g. manual taps close to the 2-hourly
+   schedule) all check out the same `main` and race to `git push` — only the
+   fastest wins, the rest get `[rejected] main -> main (fetch first)` and
+   their fetched data is lost, not just delayed. Fixed with a `concurrency`
+   group in `fetch-prices.yml` (queues overlapping runs instead of racing)
+   plus a pull-and-retry loop in the push step as backup.
 
 ### current.json schema
 

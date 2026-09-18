@@ -18,11 +18,37 @@ import re
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import unescape as unescape_html
 from zoneinfo import ZoneInfo
 
 DUBAI_TZ = ZoneInfo("Asia/Dubai")
+
+# Defensive bounds/thresholds shared by every retail-gold scraper
+# (KT, Gulf News, Dubai City of Gold) below. Both classes of failure
+# below were confirmed to actually happen, silently, on 2026-09-18:
+#
+# 1. STALENESS: khaleejtimes.com's CDN served a page frozen at an
+#    earlier generation time to every fetch -- 3 requests 10 seconds
+#    apart all returned the identical "12:00:03" timestamp and values
+#    despite 2+ real hours having passed. Cache-busting (_fetch_url)
+#    fixes this for now, but if a source changes its caching setup
+#    again, or cache-busting itself stops working, this catches it: a
+#    source's OWN reported generation time is checked against wall
+#    clock, and anything older than MAX_STALENESS is treated as a
+#    failed fetch rather than trusted just because a response came
+#    back.
+#
+# 2. IMPLAUSIBLE VALUES: a page redesign, currency swap, or wrong
+#    column being read can produce a number that parses fine but is
+#    nonsense (e.g. picking up a currency code's numeric ID, or an
+#    ounce price where a gram price was expected). GOLD_GRAM_BOUNDS /
+#    SILVER_KG_BOUNDS are deliberately generous (they should never
+#    need updating for ordinary price movement) so they only catch
+#    genuinely broken parses, not real price swings.
+MAX_STALENESS = timedelta(minutes=90)
+GOLD_GRAM_BOUNDS = (200, 1000)     # AED/gram, 24K or 18K
+SILVER_KG_BOUNDS = (2000, 20000)   # AED/kg
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CURRENT_PATH = os.path.join(REPO_ROOT, "data", "current.json")
@@ -93,19 +119,34 @@ def _fetch_url(url: str) -> str:
         return r.read().decode("utf-8", "ignore")
 
 
-def _kt_slot_values(rates: list, type_label: str) -> dict:
+def _kt_slot_values(rates: list, type_label: str, bounds: tuple) -> dict:
     """rates is the page's own list of {"type": ..., "morning": ...,
     "afternoon": ..., "evening": ..., "yesterday": ...} rows (silver
     rows have no "afternoon" key at all). Returns {"morning": float|
     None, "afternoon": float|None, "evening": float|None} for the row
     matching type_label, reading each slot's OWN labeled value instead
-    of guessing which slot a single "latest" number belongs to."""
+    of guessing which slot a single "latest" number belongs to.
+
+    bounds: (lo, hi) plausible range for this row -- see the module
+    docstring above MAX_STALENESS. A slot whose parsed value falls
+    outside it is treated as not-yet-published (None) rather than
+    trusted, so a structural change on KT's end produces a loud
+    warning + missing data instead of a silently wrong price.
+    """
     row = next((r for r in rates if r.get("type") == type_label), None)
+    lo, hi = bounds
     out = {}
     for slot in SLOTS:
         raw = (row.get(slot) if row else "") or ""
         raw = raw.replace(",", "").strip()
-        out[slot] = float(raw) if raw else None
+        if not raw:
+            out[slot] = None
+            continue
+        v = float(raw)
+        if not (lo < v < hi):
+            print(f"WARNING: KT {type_label} {slot}={v} outside plausible range {bounds}, discarding", file=sys.stderr)
+            v = None
+        out[slot] = v
     return out
 
 
@@ -140,12 +181,29 @@ def fetch_kt():
     data = json.loads(unescape_html(m.group(1)))
     props = data.get("props", {})
 
-    gold_rates = props.get("goldRates", {}).get("rates", [])
+    gold_rates_obj = props.get("goldRates", {})
+    gold_rates = gold_rates_obj.get("rates", [])
     silver_rates = props.get("silverRates", {}).get("rates", [])
 
-    gold_24k = _kt_slot_values(gold_rates, "24K")
-    gold_18k = _kt_slot_values(gold_rates, "18K")
-    silver = _kt_slot_values(silver_rates, "Kilo (AED)")
+    # Staleness guard -- see MAX_STALENESS above. KT's own "date" field
+    # is Dubai-local with no explicit offset; if its format ever
+    # changes this just skips the check rather than failing the whole
+    # fetch over a field we can't parse (the plausibility bounds below
+    # still guard the actual values).
+    page_date_str = gold_rates_obj.get("date")
+    if page_date_str:
+        try:
+            page_dt = datetime.strptime(page_date_str, "%B %d, %Y %H:%M:%S").replace(tzinfo=DUBAI_TZ)
+        except ValueError:
+            page_dt = None
+        if page_dt is not None:
+            age = datetime.now(DUBAI_TZ) - page_dt
+            if age > MAX_STALENESS:
+                raise RuntimeError(f"KT: page data looks stale (reported {page_date_str}, {age} old) -- possible CDN cache issue")
+
+    gold_24k = _kt_slot_values(gold_rates, "24K", GOLD_GRAM_BOUNDS)
+    gold_18k = _kt_slot_values(gold_rates, "18K", GOLD_GRAM_BOUNDS)
+    silver = _kt_slot_values(silver_rates, "Kilo (AED)", SILVER_KG_BOUNDS)
 
     # KT never publishes an "afternoon" silver rate -- carry morning's
     # figure forward so the afternoon check still records something
@@ -195,11 +253,31 @@ def fetch_gulfnews_gold():
         if not data:
             raise RuntimeError("no goldApiData in page")
 
+        # Staleness guard -- see MAX_STALENESS above. lastUpdated is
+        # ISO8601 with an explicit offset, so fromisoformat handles it
+        # directly (Python 3.11+).
+        last_updated_str = data.get("lastUpdated")
+        if last_updated_str:
+            try:
+                updated_dt = datetime.fromisoformat(last_updated_str)
+            except ValueError:
+                updated_dt = None
+            if updated_dt is not None:
+                age = datetime.now(DUBAI_TZ) - updated_dt
+                if age > MAX_STALENESS:
+                    raise RuntimeError(f"Gulf News: data looks stale (reported {last_updated_str}, {age} old)")
+
         def _latest(carat_data):
+            lo, hi = GOLD_GRAM_BOUNDS
             for slot in ("evening", "afternoon", "morning"):
-                v = carat_data.get(slot)
-                if v not in (None, ""):
-                    return float(v)
+                raw = carat_data.get(slot)
+                if raw in (None, ""):
+                    continue
+                v = float(raw)
+                if not (lo < v < hi):
+                    print(f"WARNING: Gulf News {slot}={v} outside plausible range {GOLD_GRAM_BOUNDS}, discarding", file=sys.stderr)
+                    continue
+                return v
             return None
 
         return _latest(data.get("carat24", {})), _latest(data.get("carat18", {}))
@@ -217,13 +295,35 @@ def fetch_dubaicityofgold_gold():
     try:
         html = _fetch_url(DUBAI_CITY_OF_GOLD_URL)
 
+        # Staleness guard -- see MAX_STALENESS above. This page has no
+        # structured timestamp, only relative text like "Updated 3
+        # minutes ago" / "Updated 2 hours ago" / "Updated 1 day ago" --
+        # coarser than KT/Gulf News's exact timestamps, but "hour(s)"
+        # or "day(s)" always exceeds MAX_STALENESS (90 min) on its own,
+        # and "minute(s)"/"min" is compared numerically.
+        m = re.search(r'class="update-dte">\s*Updated\s+([^<]+?)\s*</span>', html)
+        if m:
+            age_text = m.group(1).strip().lower()
+            if "hour" in age_text or "day" in age_text:
+                raise RuntimeError(f"Dubai City of Gold: data looks stale (\"Updated {age_text}\")")
+            mins_match = re.search(r'(\d+)\s*min', age_text)
+            if mins_match and int(mins_match.group(1)) > MAX_STALENESS.total_seconds() / 60:
+                raise RuntimeError(f"Dubai City of Gold: data looks stale (\"Updated {age_text}\")")
+
         def _extract(karat_label):
             m = re.search(
                 rf'{karat_label} Gold</span>\s*<span class="sortd-gold-value">'
                 rf'AED\s*([\d.]+)</span>',
                 html,
             )
-            return float(m.group(1)) if m else None
+            if not m:
+                return None
+            v = float(m.group(1))
+            lo, hi = GOLD_GRAM_BOUNDS
+            if not (lo < v < hi):
+                print(f"WARNING: Dubai City of Gold {karat_label}={v} outside plausible range {GOLD_GRAM_BOUNDS}, discarding", file=sys.stderr)
+                return None
+            return v
 
         return _extract("24K"), _extract("18K")
     except Exception as e:
