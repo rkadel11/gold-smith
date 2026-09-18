@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from datetime import datetime
 from html import unescape as unescape_html
@@ -75,7 +76,19 @@ HEADERS = {
 }
 
 def _fetch_url(url: str) -> str:
-    req = urllib.request.Request(url, headers=HEADERS)
+    # Cache-bust every request -- confirmed 2026-09-18 that
+    # khaleejtimes.com's CDN was serving a snapshot frozen over 2
+    # hours stale (identical timestamp and values across repeated
+    # fetches spanning real elapsed time) without this. No amount of
+    # polling more often helps if every request just hits the same
+    # cached copy. A unique query param plus no-cache headers reliably
+    # got a fresh response in testing; applied here so every source
+    # (KT, Gulf News, Dubai City of Gold, Kitco) gets it via the one
+    # shared helper.
+    sep = "&" if "?" in url else "?"
+    busted_url = f"{url}{sep}_={int(time.time())}"
+    headers = {**HEADERS, "Cache-Control": "no-cache", "Pragma": "no-cache"}
+    req = urllib.request.Request(busted_url, headers=headers)
     with urllib.request.urlopen(req, timeout=25) as r:
         return r.read().decode("utf-8", "ignore")
 
@@ -168,22 +181,28 @@ def _extract_json_value(html: str, key: str):
 
 def fetch_gulfnews_gold():
     """Cross-check source: Gulf News embeds a goldApiData JSON blob
-    with today's current 24K/18K AED/gram rate. No separate
-    morning/afternoon/evening slots like KT -- just whatever Gulf News
-    currently has live, under a "morning" key regardless of what time
-    of day it actually reflects. Returns (gold_24k, gold_18k), each
-    float or None if unavailable."""
+    with 24K/18K AED/gram rates. It DOES fill in morning/afternoon/
+    evening keys progressively through the day like KT, contrary to
+    what was assumed when this was written -- confirmed 2026-09-18
+    that reading only "morning" silently returned a stale value once
+    "afternoon" had been published (529.75 instead of the actual
+    528.75). Prefer the latest of evening/afternoon/morning that's
+    actually present, same priority order used elsewhere (SLOTS).
+    Returns (gold_24k, gold_18k), each float or None if unavailable."""
     try:
         html = _fetch_url(GULF_NEWS_URL)
         data = _extract_json_value(html, "goldApiData")
         if not data:
             raise RuntimeError("no goldApiData in page")
-        c24 = data.get("carat24", {}).get("morning")
-        c18 = data.get("carat18", {}).get("morning")
-        return (
-            float(c24) if c24 not in (None, "") else None,
-            float(c18) if c18 not in (None, "") else None,
-        )
+
+        def _latest(carat_data):
+            for slot in ("evening", "afternoon", "morning"):
+                v = carat_data.get(slot)
+                if v not in (None, ""):
+                    return float(v)
+            return None
+
+        return _latest(data.get("carat24", {})), _latest(data.get("carat18", {}))
     except Exception as e:
         print(f"WARNING: Gulf News fetch failed ({e})", file=sys.stderr)
         return None, None
