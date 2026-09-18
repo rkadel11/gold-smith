@@ -406,7 +406,17 @@ def sync_table(sheet_name: str, table_name: str, day_map: dict, column_map: dict
                 # current.json/history is the source of truth every
                 # run, so None here should always mean "show blank",
                 # never "leave whatever was there".
-                lines.append(f'                set value of cell {col_idx} of row {r} to missing value')
+                #
+                # An empty string, NOT `missing value` -- confirmed
+                # 2026-09-18: downstream formulas elsewhere in the
+                # workbook check `cell <> ""` to detect "not yet
+                # published" and pick an earlier slot instead. A
+                # Number-column cell cleared via `missing value`
+                # doesn't reliably equal the TEXT "" in that
+                # comparison (reads as blank-as-zero, so `<> ""`
+                # can wrongly evaluate true), which was producing
+                # $0.00 instead of falling back correctly.
+                lines.append(f'                set value of cell {col_idx} of row {r} to ""')
         for formula_col, source_col in formula_map.items():
             letter = column_letter(source_col)
             lines.append(f'                set value of cell {formula_col} of row {r} to "={letter}{r}/31.1034768"')
