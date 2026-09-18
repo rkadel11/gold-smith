@@ -358,11 +358,16 @@ try {
   // slow on a cellular connection) shouldn't take down the other, so
   // this is its own try/catch rather than sharing the outer one.
   let data = null
+  let currentError = null
   try {
     data = await fetchCurrent()
   } catch (e) {
     // No cached KT/Kitco AED data this refresh -- the rows below fall
-    // back to "--", but the live spot fetch can still succeed.
+    // back to "--", but the live spot fetch can still succeed. Keep
+    // the reason in case EVERYTHING ends up empty below -- "No price
+    // data yet" alone doesn't say why, which just shifts the
+    // debugging work onto a screenshot-and-guess round trip.
+    currentError = e.message
   }
   const prices = data ? extractPrices(data) : {
     time: null,
@@ -376,6 +381,7 @@ try {
   }
 
   let live = null
+  let liveError = null
   try {
     live = await fetchKitcoLive()
   } catch (e1) {
@@ -384,7 +390,9 @@ try {
     } catch (e2) {
       // Both live sources failed -- fall back to converting the
       // cached AED value back to USD via the fixed peg, rather than
-      // showing nothing.
+      // showing nothing. Keep both reasons for the same "No price
+      // data yet" diagnostic case as above.
+      liveError = `Kitco: ${e1.message} | gold-api: ${e2.message}`
     }
   }
 
@@ -422,7 +430,11 @@ try {
 
   widget = (prices.ktGold24k || prices.kitcoGoldGm || live)
     ? await buildWidget(prices)
-    : errorWidget("No price data yet\nCheck gold-smith repo")
+    : errorWidget(
+        "No price data yet\n" +
+        (currentError ? `current.json: ${currentError}\n` : "") +
+        (liveError ? `live spot: ${liveError}` : "")
+      )
 } catch (e) {
   widget = errorWidget("Could not fetch prices\n" + e.message)
 }
