@@ -336,8 +336,27 @@ function errorWidget(msg) {
 // ── Main ───────────────────────────────────────────────
 let widget
 try {
-  const data = await fetchCurrent()
-  const prices = extractPrices(data)
+  // current.json and the live Kitco/gold-api spot fetch are independent
+  // sources -- a timeout on one (e.g. raw.githubusercontent.com being
+  // slow on a cellular connection) shouldn't take down the other, so
+  // this is its own try/catch rather than sharing the outer one.
+  let data = null
+  try {
+    data = await fetchCurrent()
+  } catch (e) {
+    // No cached KT/Kitco AED data this refresh -- the rows below fall
+    // back to "--", but the live spot fetch can still succeed.
+  }
+  const prices = data ? extractPrices(data) : {
+    time: null,
+    ktGold24k: null,
+    ktGold18k: null,
+    kitcoGoldOz: null,
+    kitcoGoldGm: null,
+    ktSilverKg: null,
+    kitcoSilverKg: null,
+    isLive: false,
+  }
 
   let live = null
   try {
@@ -384,7 +403,7 @@ try {
   }
   writeLastOz(prices.usdOz)
 
-  widget = (prices.ktGold24k || prices.kitcoGoldGm)
+  widget = (prices.ktGold24k || prices.kitcoGoldGm || live)
     ? await buildWidget(prices)
     : errorWidget("No price data yet\nCheck gold-smith repo")
 } catch (e) {
