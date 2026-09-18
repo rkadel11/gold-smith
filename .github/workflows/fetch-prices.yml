@@ -2,11 +2,16 @@ name: Fetch metal prices
 
 on:
   schedule:
-    # Dubai is UTC+4 year-round (no DST) — these correspond to
-    # 10:00, 14:00, 18:00 Dubai time.
-    - cron: "0 6 * * *"
-    - cron: "0 10 * * *"
-    - cron: "0 14 * * *"
+    # Every 2 hours, all day (UTC). KT's own page timestamps its
+    # morning gold rate as live by ~06:00 Dubai time (02:00 UTC) --
+    # well before the old fixed 10am/2pm/6pm Dubai schedule ever
+    # checked -- so a fixed 3x/day schedule left the widget showing
+    # yesterday's numbers for hours after KT had already updated.
+    # Polling every 2 hours instead means whichever slot KT actually
+    # updates in gets picked up within 2 hours of it happening. The
+    # commit step below already only pushes when something changed,
+    # so the extra runs are no-ops the rest of the time.
+    - cron: "0 */2 * * *"
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 permissions:
