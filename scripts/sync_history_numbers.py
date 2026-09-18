@@ -389,6 +389,19 @@ def sync_table(sheet_name: str, table_name: str, day_map: dict, column_map: dict
             val = row_data.get(field)
             if val is not None:
                 lines.append(f'                set value of cell {col_idx} of row {r} to {val}')
+            else:
+                # Explicitly clear rather than skip -- confirmed
+                # 2026-09-18: skipping left a NEW row showing a stale
+                # value (e.g. "Evening Gold" for a day whose evening
+                # slot genuinely hasn't been published by KT yet),
+                # because Numbers' "add row above/below" clones the
+                # adjacent row's cell VALUES, not just formatting, so
+                # an unwritten cell on a freshly-inserted row isn't
+                # actually blank -- it's whatever the row above had.
+                # current.json/history is the source of truth every
+                # run, so None here should always mean "show blank",
+                # never "leave whatever was there".
+                lines.append(f'                set value of cell {col_idx} of row {r} to missing value')
         for formula_col, source_col in formula_map.items():
             letter = column_letter(source_col)
             lines.append(f'                set value of cell {formula_col} of row {r} to "={letter}{r}/31.1034768"')
