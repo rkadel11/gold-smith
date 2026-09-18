@@ -301,11 +301,16 @@ def update_kitco_open_close(day_data: dict):
         return
 
     def _pick(slot, reading):
+        # .get(), not direct indexing -- a slot's reading may have been
+        # merged from KT alone (Kitco's fetch failed, or hasn't touched
+        # this slot yet), so "gold" may not have kitco_oz/kitco_gms_24k
+        # at all. Same class of bug as update_high()'s .setdefault() fix.
+        gold = reading.get("gold", {})
         return {
             "slot": slot,
             "time": reading["time"],
-            "kitco_oz": reading["gold"]["kitco_oz"],
-            "kitco_gms_24k": reading["gold"]["kitco_gms_24k"],
+            "kitco_oz": gold.get("kitco_oz"),
+            "kitco_gms_24k": gold.get("kitco_gms_24k"),
         }
 
     opening_slot, opening_reading = available[0]
