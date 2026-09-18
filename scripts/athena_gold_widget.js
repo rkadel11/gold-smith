@@ -140,11 +140,28 @@ function fallbackDirection(currentOz) {
 // was iterated first (morning) on a tie instead of the actual latest
 // one. Confirmed 2026-09-17: this showed a stale morning KT price all
 // day even after afternoon/evening had newer data.
+const SLOTS = ["evening", "afternoon", "morning"]
+
 function latestReading(data) {
-  const slots = ["evening", "afternoon", "morning"]
-  for (const s of slots) {
+  for (const s of SLOTS) {
     const r = data.readings && data.readings[s]
     if (r) return r
+  }
+  return null
+}
+
+// Walks slots newest-first and returns the first non-null value for
+// this specific metal/field -- NOT the same slot for every field.
+// Different metals/fields fill in at different points in the day (KT's
+// silver table, for instance, already shows an "evening" value while
+// gold's evening cell is still blank), so a slot that's the overall
+// "latest" can still be missing a field that an earlier slot has.
+// Picking one whole slot for everything was showing KT gold as "--"
+// whenever a later slot had silver but not gold yet.
+function latestField(data, metal, field) {
+  for (const s of SLOTS) {
+    const v = data.readings?.[s]?.[metal]?.[field]
+    if (v != null) return v
   }
   return null
 }
@@ -156,12 +173,12 @@ function extractPrices(data) {
   if (latest) {
     return {
       time: latest.time,
-      ktGold24k: latest.gold.kheeljtimes_gms_24k,
-      ktGold18k: latest.gold.kheeljtimes_gms_18k,
-      kitcoGoldOz: latest.gold.kitco_oz,
-      kitcoGoldGm: latest.gold.kitco_gms_24k,
-      ktSilverKg: latest.silver.kheeljtimes_kg,
-      kitcoSilverKg: latest.silver.kitco_kg,
+      ktGold24k: latestField(data, "gold", "kheeljtimes_gms_24k"),
+      ktGold18k: latestField(data, "gold", "kheeljtimes_gms_18k"),
+      kitcoGoldOz: latestField(data, "gold", "kitco_oz"),
+      kitcoGoldGm: latestField(data, "gold", "kitco_gms_24k"),
+      ktSilverKg: latestField(data, "silver", "kheeljtimes_kg"),
+      kitcoSilverKg: latestField(data, "silver", "kitco_kg"),
       isLive: true,
     }
   }
