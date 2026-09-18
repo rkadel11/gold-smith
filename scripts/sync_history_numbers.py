@@ -67,6 +67,11 @@ DOC_FILENAME = "gold silver price history.numbers"
 LOG_PATH = os.path.expanduser("~/Library/Logs/gold_silver_history_sync.log")
 DUBAI = ZoneInfo("Asia/Dubai")
 
+# Set by the manual-run Shortcut (via `SYNC_KEEP_DOC_OPEN=1` before this
+# script) so pressing the button leaves the document open to look at,
+# instead of the scheduled automation's close-when-done behavior.
+KEEP_DOC_OPEN = os.environ.get("SYNC_KEEP_DOC_OPEN") == "1"
+
 MIN_HEADROOM_YEARS = 1
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 TIMEOUT = 20
@@ -483,7 +488,9 @@ def main():
                 any_touched = True
                 log(f"Sheet '{year}' / '{table_name}': upserted {touched} day(s).")
 
-    if any_touched:
+    if any_touched and KEEP_DOC_OPEN:
+        log("Leaving document open (SYNC_KEEP_DOC_OPEN set).")
+    elif any_touched:
         try:
             close_doc()
             log("Document closed.")

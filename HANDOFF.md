@@ -146,16 +146,28 @@ Both live in `~/Library/Mobile Documents/com~apple~Numbers/Documents/`
 can't find one, check `com~apple~CloudDocs/Documents/` as a fallback, that's
 where they used to be).
 
-### `P1 2.0 .numbers` — jewelry price list — **NOT YET BUILT**
-Sheet "Price List" > table "Metal Price": Date | Kitco Gold OZ | Kitco Gold
-Gms (native formula, NEVER script-written) | KT Gold Gms 24k | KT Silver Kg |
-Kitco Silver Kg. Rolling 15 days, eviction-based. Still needs: a manual
-"Update Prices" button (shortcuts:// URL, works on any device) pulling
-`current.json`, plus an auto-trigger on Mac only if the file happens to be
-open (no reliable equivalent on iPad — Shortcuts there can't check "is this
-document open"). Max-of-day compare-and-replace, not always-insert. **Ask
-Raj how the existing Kheeljtimes button is wired before building this** —
-he wants to reuse that mechanism, not reinvent one.
+### `P1 2.0 .numbers` — jewelry price list — **BUILT & WORKING**
+**Updated 2026-09-18** — this got built (by an earlier session not reflected
+in git history until now) since this doc previously said "NOT YET BUILT".
+Sheet "Price List", two tables, same column layout as
+`gold silver price history.numbers`'s Gold Price / Silver Price tables:
+Gold Price = rolling **15** calendar days, Silver Price = rolling **7**
+days, both **newest-first** (opposite of the history file's oldest-first
+convention — Raj's preference). Synced by `scripts/update_p1_prices.py`,
+run via a macOS Shortcut named **"Update P1 Prices"** (paste
+`p1_shortcut_run_shell_script.sh`'s content into a Run Shell Script action)
+— triggerable from any device via the Shortcut's `shortcuts://` URL. A
+separate `scripts/p1_autoupdate_watch.py` (a LaunchAgent poller that
+detects the moment "P1 2.0 .numbers" newly opens in Numbers and runs the
+update once) was mentioned by that script's docstring but **not yet in this
+repo** — get its content from whichever Mac runs it and add it here next
+time it comes up, same reasoning as the two shortcut wrapper scripts below.
+
+Unlike the history file's upsert-by-date, this is a **fixed-size window**:
+every run rewrites rows 3..(3+N-1) unconditionally with the N most recent
+days, so a row position gets reused by a different calendar day each time
+the window shifts. Bug #6 below is specific to this rewrite-in-place
+behavior and doesn't apply to the history file's upsert logic.
 
 ### `gold silver price history.numbers` — cross-reference archive — **BUILT & WORKING**
 One sheet per year (`Template`, `2026`, `2027` currently — **only 1 year of
@@ -171,12 +183,31 @@ has 3 tables, one row per calendar day:
   most recent (keeps advancing through the day)
 
 Synced by `scripts/sync_history_numbers.py`, run via a macOS Shortcut named
-**"Sync Gold Silver History"** (paste `shortcut_run_shell_script.sh`'s
-content into one "Run Shell Script" action, Shell=`/bin/zsh`). Currently
-only set up on the MacBook Air — **needs the same Shortcut + a Personal
-Automation added on the Mac Mini** (Time of Day, repeat Daily; Raj wanted
-3x/day matching GitHub's own schedule, ~10:15am/2:15pm/6:15pm Dubai, run a
-few minutes after each Actions fetch so `current.json` has updated).
+**"Sync Gold Silver History"** (also seen named "Update GSH" — same script).
+Currently only set up on the MacBook Air — **needs the same Shortcut + a
+Personal Automation added on the Mac Mini** (Time of Day, repeat Daily; Raj
+wanted 3x/day matching GitHub's own schedule, ~10:15am/2:15pm/6:15pm Dubai,
+run a few minutes after each Actions fetch so `current.json` has updated).
+
+**Updated 2026-09-18 — fetch-from-GitHub wrapper pattern.** Both this
+Shortcut and "Update P1 Prices" used to have the *entire* Python script's
+content pasted directly into their Run Shell Script action. Confirmed
+problem: a fix to the script never reaches an already-pasted copy, and if
+the same Shortcut exists on more than one Mac, EVERY copy needs manually
+re-pasting — easy to forget, causes silent drift between machines (this is
+exactly how `sync_history_numbers.py`'s bug #6 below went unfixed on-device
+even after the repo's copy was corrected). Now both Shortcuts should instead
+run `shortcut_run_shell_script.sh` / `p1_shortcut_run_shell_script.sh`
+respectively — tiny wrappers that curl the actual script fresh from GitHub's
+`main` branch every run. One fix on GitHub now applies to every Mac,
+automatically, next time each Shortcut fires. If a Shortcut still has a
+pasted-in copy instead of one of these wrappers, replace it.
+
+The manual "Sync Gold Silver History" run also sets `SYNC_KEEP_DOC_OPEN=1`
+before invoking the wrapper (leaves the document open afterward to look
+at, vs. the scheduled automation's close-when-done) — `sync_history_numbers.py`
+reads this env var itself (`KEEP_DOC_OPEN`), so this line stays in the
+Shortcut's own action, not baked into the wrapper.
 
 **Real bugs found and fixed while building this** (don't reintroduce):
 1. `open_doc_preamble()`'s AppleScript assumed a freshly-opened document is
@@ -199,6 +230,17 @@ few minutes after each Actions fetch so `current.json` has updated).
    added. Fixed with `.setdefault()`.
 5. AppleEvent timeouts (`-1712`) happen under back-to-back automation —
    `run_applescript()` does one quiet retry before treating it as real.
+6. **Confirmed 2026-09-18** in both `sync_table()` here and
+   `write_window()` in `update_p1_prices.py`: a column with no value
+   (e.g. "Evening Gold" before KT publishes it) was only ever *written*
+   when a value existed, never explicitly *cleared* otherwise — so the
+   cell just kept showing whatever was already there. In
+   `update_p1_prices.py` this was worse: since it's a fixed-size rolling
+   window that rewrites row 3 with a *different* calendar day every run,
+   an unpublished cell there showed the PREVIOUS occupant's value (e.g.
+   yesterday's Evening Gold bleeding into today's row) — this is what
+   Raj actually saw and reported. Both now explicitly set
+   `missing value` for a `None` field instead of skipping it.
 
 Row insertion handles both the common case (append after existing rows,
 reusing blank template rows first) and the rare case (a backfilled day
