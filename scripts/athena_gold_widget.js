@@ -23,6 +23,18 @@
 // changes shape. % change now comes from Kitco's own official
 // changePercentage (vs. the previous close) rather than a comparison
 // against this widget's own last refresh.
+//
+// v5 — merged in temp/manual_refresh_trigger.js's GitHub trigger: a
+// TAP now fires the fetch-prices.yml Action and waits for it before
+// reading current.json, instead of showing whatever was already there
+// (which could be up to 2hrs old). Only happens on an interactive
+// open (config.runsInWidget false) -- iOS's own silent background
+// refresh skips this entirely, since that has a strict execution
+// budget and unpredictable timing, unlike a tap which opens the app
+// in the foreground with room to wait ~18s. Needs the same GitHub PAT
+// in Keychain that temp/manual_refresh_trigger.js sets up -- if it's
+// not there, this silently skips the trigger and just shows whatever
+// current.json already has, same as before.
 
 const GOLD       = new Color("#f9c416")
 const PURPLE     = new Color("#c4b5fd")
@@ -39,11 +51,55 @@ const GOLD_API_XAG_URL = "https://api.gold-api.com/price/XAG"
 const OZ_TO_GRAMS = 31.1034768
 const AED_PER_USD = 3.6725
 
+const GITHUB_REPO_OWNER = "rkadel11"
+const GITHUB_REPO_NAME = "gold-smith"
+const GITHUB_WORKFLOW_FILE = "fetch-prices.yml"
+const GITHUB_TOKEN_KEY = "goldSmithGithubToken"
+const REFRESH_WAIT_SECONDS = 18
+
 // ── Fetch ──────────────────────────────────────────────
 async function fetchCurrent() {
   const req = new Request(DATA_URL)
   req.timeoutInterval = 15
   return await req.loadJSON()
+}
+
+function sleep(seconds) {
+  return new Promise(resolve => Timer.schedule(seconds, false, resolve))
+}
+
+// Fires the GitHub Action and waits ~18s (observed run time in
+// testing) before returning, so the fetchCurrent() call right after
+// this sees freshly-committed data instead of whatever was already
+// there. Only called on an interactive tap -- see v5 note above.
+// Fails open: any problem (no token, network, GitHub rejecting it)
+// just skips the wait silently rather than blocking the widget from
+// showing prices at all -- this is a nice-to-have, not something
+// price display should ever depend on.
+async function triggerGitHubRefreshAndWait() {
+  if (!Keychain.contains(GITHUB_TOKEN_KEY)) return
+  try {
+    const token = Keychain.get(GITHUB_TOKEN_KEY)
+    const url = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/${GITHUB_WORKFLOW_FILE}/dispatches`
+    const req = new Request(url)
+    req.method = "POST"
+    req.headers = {
+      "Authorization": `Bearer ${token}`,
+      "Accept": "application/vnd.github+json",
+      "User-Agent": "gold-smith-scriptable-trigger",
+      "Content-Type": "application/json",
+    }
+    req.body = JSON.stringify({ ref: "main" })
+    req.timeoutInterval = 15
+    await req.loadString()
+    if (req.response.statusCode === 204) {
+      await sleep(REFRESH_WAIT_SECONDS)
+    }
+  } catch (e) {
+    // Trigger failing (bad/expired token, network, etc.) shouldn't
+    // block the rest of the widget -- just skip the wait and fall
+    // through to showing whatever current.json already has.
+  }
 }
 
 // Live USD spot straight from Kitco's own page -- their Next.js
@@ -353,6 +409,14 @@ function errorWidget(msg) {
 // ── Main ───────────────────────────────────────────────
 let widget
 try {
+  // Interactive tap (not iOS's own silent background refresh) -- fire
+  // the GitHub Action and wait before reading current.json, so a tap
+  // means "get me the freshest possible data", not just "re-show
+  // whatever was already fetched up to 2hrs ago". See v5 note above.
+  if (!config.runsInWidget) {
+    await triggerGitHubRefreshAndWait()
+  }
+
   // current.json and the live Kitco/gold-api spot fetch are independent
   // sources -- a timeout on one (e.g. raw.githubusercontent.com being
   // slow on a cellular connection) shouldn't take down the other, so
