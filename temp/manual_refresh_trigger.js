@@ -65,16 +65,27 @@ async function triggerWorkflow(token) {
   }
   req.body = JSON.stringify({ ref: "main" })
   req.timeoutInterval = 15
-  await req.loadString()
+  const bodyText = await req.loadString()
   const status = req.response.statusCode
-  if (status === 401 || status === 403) {
-    // Bad/expired/under-scoped token -- clear it so the next run
-    // re-prompts instead of failing the same way forever.
+  if (status === 401) {
     Keychain.remove(TOKEN_KEY)
-    throw new Error(`GitHub rejected the token (HTTP ${status}). Re-run to enter a new one.`)
+    throw new Error("Token rejected as invalid (HTTP 401) -- re-run to enter a new one.")
+  }
+  if (status === 403) {
+    // Almost always a permission problem, not a bad token -- most
+    // commonly the fine-grained PAT's "Actions" repository permission
+    // was left at "No access" instead of "Read and write" (easy to
+    // miss among ~40 permission rows), or the wrong repo was selected
+    // under "Repository access". Surface GitHub's own message (it
+    // usually names the missing scope) instead of just the status
+    // code, and clear the token so a corrected one can be entered.
+    Keychain.remove(TOKEN_KEY)
+    let detail = bodyText
+    try { detail = JSON.parse(bodyText).message || bodyText } catch (e) {}
+    throw new Error(`Forbidden (HTTP 403): ${detail}\nCheck the token has "Actions: Read and write" permission on gold-smith specifically, then re-run to enter a corrected one.`)
   }
   if (status !== 204) {
-    throw new Error(`GitHub API returned HTTP ${status}`)
+    throw new Error(`GitHub API returned HTTP ${status}: ${bodyText}`)
   }
 }
 
