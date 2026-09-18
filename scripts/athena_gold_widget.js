@@ -59,7 +59,16 @@ const REFRESH_WAIT_SECONDS = 18
 
 // ── Fetch ──────────────────────────────────────────────
 async function fetchCurrent() {
-  const req = new Request(DATA_URL)
+  // Unique query param per request -- checked 2026-09-18:
+  // raw.githubusercontent.com's own Fastly edge cache ignores query
+  // strings entirely for its cache key (still returns x-cache: HIT
+  // with one added), so this does NOT defeat that -- but its content
+  // was verified fresh anyway (~45s old, well under its 5min TTL), so
+  // that CDN isn't the actual problem. This is for a DIFFERENT cache:
+  // iOS/Scriptable's own local on-device HTTP cache, which DOES key
+  // by full URL including query string, unlike Fastly's edge.
+  const req = new Request(`${DATA_URL}?_=${Date.now()}`)
+  req.headers = { "Cache-Control": "no-cache", "Pragma": "no-cache" }
   req.timeoutInterval = 15
   return await req.loadJSON()
 }
