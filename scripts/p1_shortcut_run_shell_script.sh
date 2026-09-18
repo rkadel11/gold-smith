@@ -11,10 +11,15 @@
 # one device, every copy would need manually re-pasting. Fetching
 # fresh each run means one fix on GitHub applies everywhere,
 # automatically, next time this Shortcut fires.
+#
+# Saved to a fixed, visible folder (~/gold-smith/scripts/) rather than
+# a throwaway /tmp file -- overwritten fresh every run, so it's always
+# the current version, but you can open that folder anytime and see
+# exactly what actually ran.
 
 set -e
-TMP=$(mktemp /tmp/update_p1_prices.XXXXXX.py)
-trap 'rm -f "$TMP"' EXIT
+SCRIPTS_DIR="$HOME/gold-smith/scripts"
+mkdir -p "$SCRIPTS_DIR"
 
-curl -fsSL "https://raw.githubusercontent.com/rkadel11/gold-smith/main/scripts/update_p1_prices.py" -o "$TMP"
-python3 "$TMP"
+curl -fsSL "https://raw.githubusercontent.com/rkadel11/gold-smith/main/scripts/update_p1_prices.py" -o "$SCRIPTS_DIR/update_p1_prices.py"
+python3 "$SCRIPTS_DIR/update_p1_prices.py"

@@ -14,10 +14,15 @@
 # drift between machines. Fetching fresh each run means every Mac
 # always executes whatever's currently on main -- one fix applies
 # everywhere, automatically, next time each Shortcut fires.
+#
+# Saved to a fixed, visible folder (~/gold-smith/scripts/) rather than
+# a throwaway /tmp file -- overwritten fresh every run, so it's always
+# the current version, but you can open that folder anytime and see
+# exactly what actually ran.
 
 set -e
-TMP=$(mktemp /tmp/sync_history_numbers.XXXXXX.py)
-trap 'rm -f "$TMP"' EXIT
+SCRIPTS_DIR="$HOME/gold-smith/scripts"
+mkdir -p "$SCRIPTS_DIR"
 
-curl -fsSL "https://raw.githubusercontent.com/rkadel11/gold-smith/main/scripts/sync_history_numbers.py" -o "$TMP"
-python3 "$TMP"
+curl -fsSL "https://raw.githubusercontent.com/rkadel11/gold-smith/main/scripts/sync_history_numbers.py" -o "$SCRIPTS_DIR/sync_history_numbers.py"
+python3 "$SCRIPTS_DIR/sync_history_numbers.py"
