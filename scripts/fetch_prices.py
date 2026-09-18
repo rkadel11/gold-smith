@@ -30,6 +30,16 @@ HISTORY_DIR = os.path.join(REPO_ROOT, "data", "history")
 KT_URL = "https://www.khaleejtimes.com/gold-forex"
 OZ_TO_GRAMS = 31.1034768
 
+# Cross-check sources for KT's retail 24K/18K AED/gram rate. Confirmed
+# 2026-09-18: KT briefly showed 522.75 for 24K while Gulf News and
+# Dubai City of Gold both independently showed 526.25 at the same
+# time -- and KT has gone silent for up to a week before. Rather than
+# trust KT alone, GOLD_24K/18K use a 2-of-3 majority across these three
+# (see reconcile_retail_gold()); only KT still supplies the
+# morning/afternoon/evening slot structure and silver.
+GULF_NEWS_URL = "https://gulfnews.com/gold-forex"
+DUBAI_CITY_OF_GOLD_URL = "https://dubaicityofgold.com/"
+
 # AED is pegged to USD by the Central Bank of UAE — fixed, not floating.
 # No need to scrape an exchange rate for this.
 AED_PER_USD = 3.6725
@@ -131,6 +141,93 @@ def fetch_kt():
         raise RuntimeError("KT: could not extract Silver Kilo(AED)")
 
     return gold_24k, gold_18k, silver
+
+
+def _extract_json_value(html: str, key: str):
+    """Finds `"key":` in raw HTML and decodes the JSON value that
+    follows, using json's own decoder to find the matching closing
+    brace/bracket instead of a regex -- the goldApiData blob below has
+    nested objects (per-country rates), so a naive non-greedy regex
+    would stop at the first inner "}" instead of the real end."""
+    marker = f'"{key}":'
+    idx = html.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(marker)
+    value, _ = json.JSONDecoder().raw_decode(html, start)
+    return value
+
+
+def fetch_gulfnews_gold():
+    """Cross-check source: Gulf News embeds a goldApiData JSON blob
+    with today's current 24K/18K AED/gram rate. No separate
+    morning/afternoon/evening slots like KT -- just whatever Gulf News
+    currently has live, under a "morning" key regardless of what time
+    of day it actually reflects. Returns (gold_24k, gold_18k), each
+    float or None if unavailable."""
+    try:
+        html = _fetch_url(GULF_NEWS_URL)
+        data = _extract_json_value(html, "goldApiData")
+        if not data:
+            raise RuntimeError("no goldApiData in page")
+        c24 = data.get("carat24", {}).get("morning")
+        c18 = data.get("carat18", {}).get("morning")
+        return (
+            float(c24) if c24 not in (None, "") else None,
+            float(c18) if c18 not in (None, "") else None,
+        )
+    except Exception as e:
+        print(f"WARNING: Gulf News fetch failed ({e})", file=sys.stderr)
+        return None, None
+
+
+def fetch_dubaicityofgold_gold():
+    """Cross-check source: Dubai City of Gold server-renders today's
+    rate directly in the page HTML (no JS execution needed) as
+    <span class="sortd-gold-type">24K Gold</span><span
+    class="sortd-gold-value">AED 526.25</span>. Returns (gold_24k,
+    gold_18k), each float or None if unavailable."""
+    try:
+        html = _fetch_url(DUBAI_CITY_OF_GOLD_URL)
+
+        def _extract(karat_label):
+            m = re.search(
+                rf'{karat_label} Gold</span>\s*<span class="sortd-gold-value">'
+                rf'AED\s*([\d.]+)</span>',
+                html,
+            )
+            return float(m.group(1)) if m else None
+
+        return _extract("24K"), _extract("18K")
+    except Exception as e:
+        print(f"WARNING: Dubai City of Gold fetch failed ({e})", file=sys.stderr)
+        return None, None
+
+
+def reconcile_retail_gold(label: str, candidates: list):
+    """candidates: [(source_name, value_or_None), ...]. Picks the
+    value at least 2 of the 3 sources agree on (rounded to 2dp, AED
+    cents). Falls back to the first available candidate (KT preferred,
+    since callers list it first) if fewer than 2 sources agree --
+    logging why, so a real 3-way split or a lone source is visible
+    rather than silently trusted. Returns (value_or_None,
+    warning_or_None)."""
+    present = [(name, round(v, 2)) for name, v in candidates if v is not None]
+    if not present:
+        return None, None
+    if len(present) == 1:
+        return present[0][1], None
+
+    counts = {}
+    for _, v in present:
+        counts[v] = counts.get(v, 0) + 1
+    value, n = max(counts.items(), key=lambda kv: kv[1])
+    if n >= 2:
+        outliers = [f"{name}={v}" for name, v in present if v != value]
+        warning = f"{label}: {value} confirmed by {n}/3, outlier(s) {outliers}" if outliers else None
+        return value, warning
+
+    return present[0][1], f"{label}: no 2/3 consensus, sources split {present}"
 
 
 def _fetch_kitco_page():
@@ -340,16 +437,41 @@ def main():
     kt_gold_24k = kt_gold_18k = kt_silver = {}
     try:
         kt_gold_24k, kt_gold_18k, kt_silver = fetch_kt()
-        for slot_values, section, key in (
-            (kt_gold_24k, "gold", "kheeljtimes_gms_24k"),
-            (kt_gold_18k, "gold", "kheeljtimes_gms_18k"),
-            (kt_silver, "silver", "kheeljtimes_kg"),
-        ):
-            for v in slot_values.values():
-                if v is not None:
-                    update_high(day_data, section, key, v, ts)
     except Exception as e:
         errors.append(f"KT fetch failed: {e}")
+
+    # Reconcile KT's 24K/18K for THIS run's slot against two independent
+    # cross-checks (Gulf News, Dubai City of Gold) -- 2-of-3 agreement
+    # wins, overriding KT alone when it's the outlier, and still
+    # producing a value from GN+DCG even if KT's fetch failed entirely
+    # (KT has gone silent for up to a week before). Only the current
+    # slot is touched; slots from earlier runs today are untouched.
+    current_slot = dubai_slot(now)
+    gn_24, gn_18 = fetch_gulfnews_gold()
+    dcg_24, dcg_18 = fetch_dubaicityofgold_gold()
+
+    consensus_24, warn_24 = reconcile_retail_gold(
+        "Gold 24K", [("KT", kt_gold_24k.get(current_slot)), ("GulfNews", gn_24), ("DubaiCityOfGold", dcg_24)]
+    )
+    consensus_18, warn_18 = reconcile_retail_gold(
+        "Gold 18K", [("KT", kt_gold_18k.get(current_slot)), ("GulfNews", gn_18), ("DubaiCityOfGold", dcg_18)]
+    )
+    for warn in (warn_24, warn_18):
+        if warn:
+            print(f"WARNING: {warn}", file=sys.stderr)
+    if consensus_24 is not None:
+        kt_gold_24k = {**kt_gold_24k, current_slot: consensus_24}
+    if consensus_18 is not None:
+        kt_gold_18k = {**kt_gold_18k, current_slot: consensus_18}
+
+    for slot_values, section, key in (
+        (kt_gold_24k, "gold", "kheeljtimes_gms_24k"),
+        (kt_gold_18k, "gold", "kheeljtimes_gms_18k"),
+        (kt_silver, "silver", "kheeljtimes_kg"),
+    ):
+        for v in slot_values.values():
+            if v is not None:
+                update_high(day_data, section, key, v, ts)
 
     kitco_gold_oz_aed = kitco_gold_gms = kitco_silver_kg = None
     try:
