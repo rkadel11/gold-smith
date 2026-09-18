@@ -27,6 +27,14 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CURRENT_PATH = os.path.join(REPO_ROOT, "data", "current.json")
 HISTORY_DIR = os.path.join(REPO_ROOT, "data", "history")
 
+# Raw, unreconciled 24K/18K readings from all three retail sources,
+# one line per run -- kept separate from current.json (which only ever
+# holds ONE reconciled value per slot) so we have a record to look
+# back on. Started 2026-09-18 to empirically check, over ~a week of
+# 2-hourly runs, which two sources actually agree with each other most
+# often, rather than assuming it from a single day's snapshot.
+SOURCE_COMPARISON_PATH = os.path.join(REPO_ROOT, "data", "source_comparison.jsonl")
+
 KT_URL = "https://www.khaleejtimes.com/gold-forex"
 OZ_TO_GRAMS = 31.1034768
 
@@ -228,6 +236,27 @@ def reconcile_retail_gold(label: str, candidates: list):
         return value, warning
 
     return present[0][1], f"{label}: no 2/3 consensus, sources split {present}"
+
+
+def log_source_comparison(ts: str, slot: str, kt_24, kt_18, gn_24, gn_18, dcg_24, dcg_18):
+    """Appends this run's raw, unreconciled 24K/18K reading from each
+    source to SOURCE_COMPARISON_PATH -- one line, never overwritten.
+    Purely observational: doesn't feed back into current.json, so a
+    logging failure here should never break the actual price update.
+    """
+    try:
+        os.makedirs(os.path.dirname(SOURCE_COMPARISON_PATH), exist_ok=True)
+        row = {
+            "time": ts,
+            "slot": slot,
+            "kt_24k": kt_24, "kt_18k": kt_18,
+            "gulfnews_24k": gn_24, "gulfnews_18k": gn_18,
+            "dubaicityofgold_24k": dcg_24, "dubaicityofgold_18k": dcg_18,
+        }
+        with open(SOURCE_COMPARISON_PATH, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as e:
+        print(f"WARNING: could not write source comparison log ({e})", file=sys.stderr)
 
 
 def _fetch_kitco_page():
@@ -447,14 +476,18 @@ def main():
     # (KT has gone silent for up to a week before). Only the current
     # slot is touched; slots from earlier runs today are untouched.
     current_slot = dubai_slot(now)
+    kt_24_raw = kt_gold_24k.get(current_slot)
+    kt_18_raw = kt_gold_18k.get(current_slot)
     gn_24, gn_18 = fetch_gulfnews_gold()
     dcg_24, dcg_18 = fetch_dubaicityofgold_gold()
 
+    log_source_comparison(ts, current_slot, kt_24_raw, kt_18_raw, gn_24, gn_18, dcg_24, dcg_18)
+
     consensus_24, warn_24 = reconcile_retail_gold(
-        "Gold 24K", [("KT", kt_gold_24k.get(current_slot)), ("GulfNews", gn_24), ("DubaiCityOfGold", dcg_24)]
+        "Gold 24K", [("KT", kt_24_raw), ("GulfNews", gn_24), ("DubaiCityOfGold", dcg_24)]
     )
     consensus_18, warn_18 = reconcile_retail_gold(
-        "Gold 18K", [("KT", kt_gold_18k.get(current_slot)), ("GulfNews", gn_18), ("DubaiCityOfGold", dcg_18)]
+        "Gold 18K", [("KT", kt_18_raw), ("GulfNews", gn_18), ("DubaiCityOfGold", dcg_18)]
     )
     for warn in (warn_24, warn_18):
         if warn:
