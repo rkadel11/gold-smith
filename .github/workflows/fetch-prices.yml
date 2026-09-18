@@ -19,6 +19,18 @@ on:
 permissions:
   contents: write
 
+# Serializes overlapping runs instead of racing -- confirmed
+# 2026-09-18: three workflow_dispatch triggers fired within seconds of
+# each other (manual taps + the schedule) all checked out the same
+# main, and only the fastest push won; the other two died with
+# "[rejected] main -> main (fetch first)" and silently dropped their
+# fetched data. queue (not cancel), since a queued run still fetches
+# fresh data when its turn comes -- more runs/data points is wanted,
+# just not racing each other.
+concurrency:
+  group: fetch-prices
+  cancel-in-progress: false
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -41,7 +53,17 @@ jobs:
           git add data/
           if ! git diff --cached --quiet; then
             git commit -m "Update prices: $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            # concurrency: group above should already serialize runs,
+            # but retry with a rebase on top of whatever landed in the
+            # meantime as a second line of defense, rather than losing
+            # this run's fetched data to a rejected push.
+            for attempt in 1 2 3; do
+              if git push; then
+                break
+              fi
+              echo "Push rejected (attempt $attempt/3), rebasing onto latest main and retrying..."
+              git pull --rebase origin main
+            done
           else
             echo "No changes to commit."
           fi
