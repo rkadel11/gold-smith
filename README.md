@@ -62,3 +62,23 @@ scraped exchange rate, since the peg doesn't float.
 **Not yet confirmed with a live test** — verify `fetch_kitco()`
 returns real numbers (via `workflow_dispatch` or running the script
 locally) before trusting it in production.
+
+## Local HTTPS server on the Mac Mini (same wifi)
+`scripts/mac_mini_https_server.py` serves `data/` over HTTPS on the LAN, so
+devices on the same wifi can read `current.json` straight off the Mac Mini.
+
+1. On the Mac Mini, from the repo folder:
+   `python3 scripts/mac_mini_https_server.py`
+   The first run creates a private CA + server cert in `~/.gold-smith-ssl/`
+   and prints the URLs, e.g. `https://<mac-name>.local:8443/current.json`.
+   Allow incoming connections if macOS asks.
+2. Trust the CA once on each other device. AirDrop
+   `~/.gold-smith-ssl/gold-smith-local-ca.crt` to it, then:
+   - iPhone: Settings → Profile Downloaded → Install, then
+     Settings → General → About → Certificate Trust Settings → turn it on.
+   - Other Mac: double-click it → Keychain Access → set "Always Trust".
+3. If the Mac Mini's IP changes, run it again with `--regen`. The CA stays
+   the same, so you don't need to reinstall it on the other devices.
+
+Never share `gold-smith-local-ca.key`. Anyone who has it can create
+certificates your devices will trust.
