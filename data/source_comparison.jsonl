@@ -257,3 +257,4 @@
 {"time": "2026-10-15T08:25:30.245489+04:00", "slot": "morning", "kt_24k": 500.0, "kt_18k": 380.5, "gulfnews_24k": 500.0, "gulfnews_18k": 380.5, "dubaicityofgold_24k": 500.0, "dubaicityofgold_18k": 380.5}
 {"time": "2026-10-15T15:18:51.985125+04:00", "slot": "afternoon", "kt_24k": 501.25, "kt_18k": 381.5, "gulfnews_24k": 501.25, "gulfnews_18k": 381.5, "dubaicityofgold_24k": 501.25, "dubaicityofgold_18k": 381.5}
 {"time": "2026-10-15T20:50:47.933318+04:00", "slot": "evening", "kt_24k": 500.75, "kt_18k": 381.0, "gulfnews_24k": 500.75, "gulfnews_18k": 381.0, "dubaicityofgold_24k": 500.75, "dubaicityofgold_18k": 381.0}
+{"time": "2026-10-16T01:16:43.897037+04:00", "slot": "morning", "kt_24k": 500.75, "kt_18k": 381.0, "gulfnews_24k": 500.75, "gulfnews_18k": 381.0, "dubaicityofgold_24k": 500.75, "dubaicityofgold_18k": 381.0}
