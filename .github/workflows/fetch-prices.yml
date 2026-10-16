@@ -2,10 +2,14 @@ name: Fetch metal prices
 
 on:
   schedule:
-    # Every 2 hours, starting at 06:05 Dubai time (02:05 UTC) -- KT's
-    # own page timestamps its morning gold rate as live by ~06:00
-    # Dubai time, so :05 past gives it a moment to have posted before
-    # we check. The old fixed 10am/2pm/6pm Dubai schedule left the
+    # Every 2 hours at :37 past (UTC 02:37 = Dubai 06:37, then 08:37,
+    # 10:37 ...). Moved
+    # off :05 on 2026-10-16: since ~2026-10-07 GitHub has been
+    # delaying/dropping our scheduled runs (12/day -> ~4/day, 5-7h
+    # gaps), and the top of the hour is when GitHub's cron load peaks,
+    # so an off-peak minute is less likely to be skipped. KT posts its
+    # morning rate by ~06:00 Dubai, so the 06:37 run picks it up.
+    # The old fixed 10am/2pm/6pm Dubai schedule left the
     # widget showing yesterday's numbers for hours after KT had
     # already updated; every 2 hours picks up whichever slot actually
     # changed within 2 hours of it happening. Also feeds
@@ -13,7 +17,7 @@ on:
     # ongoing comparison of KT vs Gulf News vs Dubai City of Gold. The
     # commit step below already only pushes when something changed,
     # so the extra runs are no-ops the rest of the time.
-    - cron: "5 */2 * * *"
+    - cron: "37 */2 * * *"
   workflow_dispatch: {}   # lets you trigger a run manually from the Actions tab
 
 permissions:
