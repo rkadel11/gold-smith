@@ -1,62 +1,75 @@
 {
   "date": "2026-11-02",
-  "last_updated": "2026-11-02T00:49:03.070303+04:00",
+  "last_updated": "2026-11-02T05:47:42.347236+04:00",
   "gold": {
     "kheeljtimes_gms_24k": {
-      "high": 467.0,
-      "last_seen": "2026-11-02T00:49:03.070303+04:00"
+      "high": 470.5,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     },
     "kheeljtimes_gms_18k": {
-      "high": 355.5,
-      "last_seen": "2026-11-02T00:49:03.070303+04:00"
+      "high": 358.25,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     },
     "kitco_oz": {
-      "high": 14232.4065,
-      "last_seen": "2026-11-02T00:49:03.070303+04:00"
+      "high": 14364.6165,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     },
     "kitco_gms_24k": {
-      "high": 457.5824944431935,
-      "last_seen": "2026-11-02T00:49:03.070303+04:00"
+      "high": 461.8331446470319,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     }
   },
   "silver": {
     "kheeljtimes_kg": {
-      "high": null,
-      "last_seen": null
+      "high": 7215.0,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     },
     "kitco_kg": {
-      "high": 5800.83871845478,
-      "last_seen": "2026-11-02T00:49:03.070303+04:00"
+      "high": 5877.114274890323,
+      "last_seen": "2026-11-02T05:47:42.347236+04:00"
     }
   },
   "readings": {
     "morning": {
-      "time": "2026-11-02T00:49:03.070303+04:00",
+      "time": "2026-11-02T05:47:42.347236+04:00",
       "gold": {
-        "kheeljtimes_gms_24k": 467.0,
-        "kheeljtimes_gms_18k": 355.5,
-        "kitco_oz": 14232.4065,
-        "kitco_gms_24k": 457.5824944431935
+        "kheeljtimes_gms_24k": 470.5,
+        "kheeljtimes_gms_18k": 358.25,
+        "kitco_oz": 14364.6165,
+        "kitco_gms_24k": 461.8331446470319
       },
       "silver": {
-        "kitco_kg": 5800.83871845478
+        "kitco_kg": 5877.114274890323,
+        "kheeljtimes_kg": 7215.0
       }
     },
-    "afternoon": null,
-    "evening": null
+    "afternoon": {
+      "time": "2026-11-02T05:47:42.347236+04:00",
+      "gold": {},
+      "silver": {
+        "kheeljtimes_kg": 7215.0
+      }
+    },
+    "evening": {
+      "time": "2026-11-02T05:47:42.347236+04:00",
+      "gold": {},
+      "silver": {
+        "kheeljtimes_kg": 7215.0
+      }
+    }
   },
   "kitco_open_close": {
     "opening": {
       "slot": "morning",
-      "time": "2026-11-02T00:49:03.070303+04:00",
-      "kitco_oz": 14232.4065,
-      "kitco_gms_24k": 457.5824944431935
+      "time": "2026-11-02T05:47:42.347236+04:00",
+      "kitco_oz": 14364.6165,
+      "kitco_gms_24k": 461.8331446470319
     },
     "closing": {
-      "slot": "morning",
-      "time": "2026-11-02T00:49:03.070303+04:00",
-      "kitco_oz": 14232.4065,
-      "kitco_gms_24k": 457.5824944431935
+      "slot": "evening",
+      "time": "2026-11-02T05:47:42.347236+04:00",
+      "kitco_oz": null,
+      "kitco_gms_24k": null
     }
   }
 }
