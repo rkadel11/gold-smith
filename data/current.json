@@ -1,75 +1,84 @@
 {
   "date": "2026-11-04",
-  "last_updated": "2026-11-04T04:52:29.399705+04:00",
+  "last_updated": "2026-11-04T22:13:23.660115+04:00",
   "gold": {
     "kheeljtimes_gms_24k": {
-      "high": 473.25,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 487.5,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     },
     "kheeljtimes_gms_18k": {
-      "high": 360.25,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 371.0,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     },
     "kitco_oz": {
-      "high": 14421.9075,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 14934.5885,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     },
     "kitco_gms_24k": {
-      "high": 463.6750930686951,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 480.1581699702459,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     }
   },
   "silver": {
     "kheeljtimes_kg": {
-      "high": 7035.0,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 7275.0,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     },
     "kitco_kg": {
-      "high": 5852.673036218253,
-      "last_seen": "2026-11-04T04:52:29.399705+04:00"
+      "high": 6183.633384033774,
+      "last_seen": "2026-11-04T22:13:23.660115+04:00"
     }
   },
   "readings": {
     "morning": {
-      "time": "2026-11-04T04:52:29.399705+04:00",
+      "time": "2026-11-04T22:13:23.660115+04:00",
       "gold": {
-        "kheeljtimes_gms_24k": 473.25,
-        "kheeljtimes_gms_18k": 360.25,
+        "kheeljtimes_gms_24k": 484.0,
+        "kheeljtimes_gms_18k": 368.5,
         "kitco_oz": 14421.9075,
         "kitco_gms_24k": 463.6750930686951
       },
       "silver": {
-        "kheeljtimes_kg": 7035.0,
+        "kheeljtimes_kg": 7275.0,
         "kitco_kg": 5852.673036218253
       }
     },
     "afternoon": {
-      "time": "2026-11-04T04:52:29.399705+04:00",
-      "gold": {},
+      "time": "2026-11-04T22:13:23.660115+04:00",
+      "gold": {
+        "kheeljtimes_gms_24k": 487.5,
+        "kheeljtimes_gms_18k": 371.0
+      },
       "silver": {
-        "kheeljtimes_kg": 7035.0
+        "kheeljtimes_kg": 7275.0
       }
     },
     "evening": {
-      "time": "2026-11-04T04:52:29.399705+04:00",
-      "gold": {},
+      "time": "2026-11-04T22:13:23.660115+04:00",
+      "gold": {
+        "kheeljtimes_gms_24k": 487.5,
+        "kheeljtimes_gms_18k": 371.0,
+        "kitco_oz": 14934.5885,
+        "kitco_gms_24k": 480.1581699702459
+      },
       "silver": {
-        "kheeljtimes_kg": 7035.0
+        "kheeljtimes_kg": 7275.0,
+        "kitco_kg": 6183.633384033774
       }
     }
   },
   "kitco_open_close": {
     "opening": {
       "slot": "morning",
-      "time": "2026-11-04T04:52:29.399705+04:00",
+      "time": "2026-11-04T22:13:23.660115+04:00",
       "kitco_oz": 14421.9075,
       "kitco_gms_24k": 463.6750930686951
     },
     "closing": {
       "slot": "evening",
-      "time": "2026-11-04T04:52:29.399705+04:00",
-      "kitco_oz": null,
-      "kitco_gms_24k": null
+      "time": "2026-11-04T22:13:23.660115+04:00",
+      "kitco_oz": 14934.5885,
+      "kitco_gms_24k": 480.1581699702459
     }
   }
 }
